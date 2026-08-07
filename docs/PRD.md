@@ -139,10 +139,69 @@ Abandon the project, don't sink more months, if after 60 days:
 | SQLite lock contention across 4 writers | Medium | WAL mode; single-writer discipline; Postgres if it bites |
 | LLM budget overrun | Low | FR-5 delta-triggered analysis |
 
-## 9. Open items requiring verification before build
+## 9. Polymarket endpoint reality (verified 2026-08-07 against live responses)
 
-- Polymarket data API endpoint shapes for activity, positions, leaderboard windows — **confirm against live responses, do not trust any spec including this one**
-- Whether `OrderFilled` events cleanly identify the user address and trade direction, or whether the maker side is the matching operator
-- Neg-risk adapter behaviour: is a complementary-token conversion distinguishable from a sell?
-- Whether leaderboard addresses are proxy wallets, and whether on-chain events show the proxy or the EOA
-- RPC provider free-tier limits at this subscription volume
+The items below were open questions as of v1.0 draft. Verified by hitting the
+live APIs directly — see `docs/api-notes.md` for raw sample responses. This
+section replaces the original open-items list; struck items are resolved,
+one remains genuinely open.
+
+### Data API — `https://data-api.polymarket.com`
+
+- **`GET /v1/leaderboard`** — not `/leaderboard`. Real params: `category`
+  (enum, default `OVERALL`), `timePeriod` (enum **`DAY | WEEK | MONTH | ALL`**
+  — not `1d/7d/30d/all-time` as originally guessed), `orderBy` (`PNL | VOL`,
+  covers the "profit vs volume variant" requirement in FR-1), `limit`
+  (max **50** per call — smaller than assumed), `offset` (max **1000**).
+  So each (category, timePeriod, orderBy) combination tops out around ~1050
+  reachable rows via offset paging. Fine for our candidate-pool size; would
+  bite if we ever wanted the full leaderboard.
+- **`GET /positions`** (open) and **`GET /closed-positions`** (resolved) —
+  both take `user` (required), return proxy-wallet-labeled rows. Real fields
+  include `cashPnl`, `percentPnl`, `realizedPnl`, `avgPrice`, `curPrice`,
+  `negativeRisk` (bool, present per-position — flags neg-risk exposure
+  directly, no separate lookup needed). `/closed-positions` `limit` maxes
+  at **50** (not 100+); paginate via `offset` (max 100000).
+- **`GET /activity`** (required `user`) — includes a `type` enum with
+  **`CONVERSION`** as a value distinct from `TRADE`. This resolves part of
+  Audit F9: at the data-api layer, a neg-risk complementary-token conversion
+  is *already tagged separately* from a sell — the Scout does not need to
+  infer it. (The harder version of F9 — decoding raw on-chain `OrderFilled`
+  events during Mirror/phase 4 — is untouched by this and still open, see
+  below.)
+- **`GET /trades`** — has `proxyWallet`, `side`, `price`, `size`,
+  `transactionHash`, but **no `log_index`**. It cannot supply the
+  `(tx_hash, log_index)` idempotency key in `observed_trades` — that table is
+  fed by the on-chain event subscriber (`chain.py`, phase 2/4), a different
+  source entirely. `/trades` is a Scout-side read for dossier history only.
+- Every address field across every endpoint is literally named
+  **`proxyWallet`**, confirming leaderboard/positions/activity/trades all key
+  on Polymarket's per-user proxy contract, not a raw EOA. ~~Whether
+  leaderboard addresses are proxy wallets~~ — **confirmed: yes.**
+
+### Gamma API — `https://gamma-api.polymarket.com`
+
+- **`GET /markets?condition_ids=<id>`** — resolutions ARE fetchable, but
+  **`closed` defaults to `false` even when `condition_ids` is given** — a
+  resolved market silently returns `[]` unless you also pass `closed=true`.
+  This is an easy silent-failure trap for FR-6 (resolution ingestion) and is
+  now the documented behavior in `resolutions.py`, not an assumption.
+  Resolved markets carry `closed: true`, `outcomes` and `outcomePrices` as
+  JSON-string arrays (e.g. `outcomePrices: ["0","1"]`), `umaResolutionStatus`,
+  `closedTime`, `negRisk`.
+
+### Rate limits (documented values, not assumed)
+
+data-api general 1000 req/10s, `/trades` 200/10s, `/positions` and
+`/closed-positions` 150/10s each. gamma-api `/markets` 300/10s. At Scout's
+scale (tens to low hundreds of candidates/day) this is not a real
+constraint — no backoff strategy needed for Phase 1.
+
+### Still genuinely open (deferred to Phase 2/4, not blocking Phase 0/1)
+
+- Whether `OrderFilled` events cleanly identify the user address (proxy or
+  EOA) and trade direction on-chain, or whether the maker side is the
+  matching operator — this requires decoding a live Polygon event, which the
+  Scout (HTTP-only) never touches. Verify when Mirror (phase 2) is built.
+- RPC provider free-tier limits — irrelevant until phase 4 (event stream);
+  Scout and Mirror-polling use HTTP APIs only, no RPC calls.

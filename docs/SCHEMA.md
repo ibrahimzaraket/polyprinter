@@ -22,7 +22,12 @@ polyprinter/
 │   │   └── conn.py             # WAL mode, single-writer discipline
 │   │
 │   ├── sources/                # ALL external I/O lives here
-│   │   ├── polymarket_data.py  # leaderboard, activity, positions
+│   │   ├── polymarket_data.py  # data-api.polymarket.com: leaderboard
+│   │   │                       # (/v1/leaderboard), activity, positions,
+│   │   │                       # closed-positions, trades — see PRD §9
+│   │   ├── polymarket_gamma.py # gamma-api.polymarket.com: market resolutions
+│   │   │                       # (/markets?condition_ids=&closed=true — the
+│   │   │                       # closed=true is NOT optional, see PRD §9)
 │   │   ├── polymarket_clob.py  # order book snapshots  [port from oracle/book.py]
 │   │   ├── chain.py            # Polygon event subscription
 │   │   └── raw_store.py        # persist raw responses before parsing
@@ -91,8 +96,12 @@ CREATE TABLE traders (
     first_seen        TEXT NOT NULL,
     last_trade_at     TEXT,
     active            INTEGER NOT NULL DEFAULT 1,
-    discovery_source  TEXT NOT NULL,             -- 'lb_1d' | 'lb_7d' | 'lb_30d'
+    discovery_source  TEXT NOT NULL,             -- 'lb_day' | 'lb_week' | 'lb_month'
                                                  -- | 'lb_all' | 'volume_sample'
+                                                 -- | 'resolved_count_sample'
+                                                 -- (leaderboard windows match the
+                                                 -- API's real timePeriod enum —
+                                                 -- see docs/PRD.md §9)
     UNIQUE (address)
 );
 
