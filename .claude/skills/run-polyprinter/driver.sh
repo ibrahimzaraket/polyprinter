@@ -11,6 +11,28 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../../.."   # -> repo root from .claude/skill
 DASH=http://127.0.0.1:8765
 FAIL=0
 
+# Never let a driver run destroy a real, populated dashboard database — this
+# actually happened (2026-08-07): a verification run wiped a live 216-trader
+# DB, and the next thing anyone saw was a dashboard reading all zeros.
+# Move the live db out of the way before resetting, restore it on exit no
+# matter how the script ends (success, assertion failure, or a `set -e`
+# abort) via an EXIT trap.
+DB_FILES=(data/polyprinter.db data/polyprinter.db-wal data/polyprinter.db-shm)
+BACKUP_SUFFIX=".driver-backup"
+
+restore_live_db() {
+  rm -f "${DB_FILES[@]}"
+  for f in "${DB_FILES[@]}"; do
+    [ -f "$f$BACKUP_SUFFIX" ] && mv "$f$BACKUP_SUFFIX" "$f"
+  done
+}
+trap restore_live_db EXIT
+
+echo "== set aside live db (if present), driver gets a clean slate =="
+for f in "${DB_FILES[@]}"; do
+  [ -f "$f" ] && mv "$f" "$f$BACKUP_SUFFIX"
+done
+
 check_status() {
   local path="$1" want="$2"
   local got

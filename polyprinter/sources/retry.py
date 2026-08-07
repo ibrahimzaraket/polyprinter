@@ -1,4 +1,4 @@
-"""Retry-with-backoff for 429s and 5xx.
+"""Retry-with-backoff for 429s, 408s, and 5xx.
 
 Found by running Scout for real, not by reading the rate-limit table: the
 published limits (docs/api-notes.md) are generous in aggregate, but Scout
@@ -6,6 +6,11 @@ fires many requests in a tight loop across candidates with no throttling —
 that burst pattern can exceed a short 10-second window even when the day's
 total is nowhere near the limit. A 429 mid-run shouldn't fail that
 candidate's dossier; back off and retry a couple of times first.
+
+408 (Request Timeout) is included for the same reason: seen live on a
+`/activity` call during a full-scale run (2026-08-07) and it's a transient
+server-side hiccup, not a real "this request is malformed" — worth a retry
+before giving up on the candidate.
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ import httpx
 
 T = TypeVar("T")
 
-RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+RETRY_STATUS_CODES = {408, 429, 500, 502, 503, 504}
 MAX_ATTEMPTS = 4
 BASE_DELAY_SECONDS = 1.0
 

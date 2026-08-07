@@ -130,12 +130,24 @@ a live run.
   Python first, then interpolate it as a single bound parameter.
 
 - **The published Polymarket rate limits are generous in aggregate but
-  Scout still gets 429s.** Scout fires many requests in a tight loop
-  across candidates with zero throttling; that burst can exceed a short
-  10-second window even when the day's total request count is nowhere
-  near the documented limit. `sources/retry.py` retries 429/5xx with
-  backoff (honoring `Retry-After` when present) — without it, ~2 of every
-  30 candidates failed their dossier fetch mid-run.
+  Scout still gets 429s (and the occasional 408).** Scout fires many
+  requests in a tight loop across candidates with zero throttling; that
+  burst can exceed a short 10-second window even when the day's total
+  request count is nowhere near the documented limit. `sources/retry.py`
+  retries 408/429/5xx with backoff (honoring `Retry-After` when present) —
+  without it, ~2 of every 30 candidates failed their dossier fetch
+  mid-run. 408 was added after a live full-scale run (2026-08-07) lost one
+  candidate to a bare timeout that would've succeeded on retry.
+
+- **`driver.sh` used to wipe the live dashboard's database, silently.**
+  It resets to a clean db on every run (`rm -f data/polyprinter.db*`) so
+  its own assertions are deterministic — but that file is the *same* db
+  the `dashboard`/`scout` services read in normal use. Running the driver
+  after a real Scout pass looked, from the dashboard, exactly like data
+  loss: every count back to zero. Fixed by having the driver move the live
+  db aside before it resets anything and restore it via an `EXIT` trap
+  (covers success, a failed assertion, and a `set -e` abort alike) — the
+  driver now always hands back whatever was there before it ran.
 
 - **`docker compose run` vs `docker compose exec`, and the agent
   sandbox's filesystem is NOT the Docker daemon's filesystem.** In this
