@@ -1,4 +1,4 @@
-# Structure & Schema — Hermes Copy Engine
+# Structure & Schema — PolyPrinter
 
 *v1.0 · 2026-08-07*
 
@@ -7,7 +7,7 @@
 ## 1. Repo structure
 
 ```
-hermes/
+polyprinter/
 ├── docker-compose.yml
 ├── Dockerfile                  # deps baked in — NEVER a /tmp venv
 ├── pyproject.toml
@@ -15,7 +15,7 @@ hermes/
 ├── config-overrides.yaml       # gitignored, written by Telegram /set
 ├── .env.example                # shape only, never real values
 │
-├── hermes/
+├── polyprinter/
 │   ├── db/
 │   │   ├── schema.sql          # §2 below, single source of truth
 │   │   ├── migrations/         # numbered, forward-only

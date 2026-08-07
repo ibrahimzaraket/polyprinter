@@ -1,4 +1,4 @@
-# Audit — Hermes Copy Engine v3 spec
+# Audit — PolyPrinter v3 spec
 
 *2026-08-07. Findings against the v3 architecture spec I wrote earlier today. All fixes are already folded into PRD.md and SCHEMA.md; this document records what was wrong and why, so the reasoning isn't lost.*
 

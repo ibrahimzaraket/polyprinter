@@ -1,4 +1,4 @@
-# PRD — Hermes Copy Engine
+# PRD — PolyPrinter
 
 *v1.0 · 2026-08-07 · supersedes the v3 architecture spec (the audit doc explains what changed and why)*
 
