@@ -1,0 +1,30 @@
+[project]
+name = "polyprinter"
+version = "0.1.0"
+description = "Polymarket trader scouting and copy-trading system"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.27",
+    "flask>=3.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["polyprinter*"]
+
+[tool.setuptools.package-data]
+# Non-.py files read at runtime — setuptools drops these by default, so
+# without this line the installed package silently has no schema/templates
+# and every deployment breaks on first connect / first page render. Found
+# by actually running the built image and clicking through it, not by
+# inspection — see .claude/skills/run-polyprinter/SKILL.md Gotchas.
+polyprinter = ["db/schema.sql", "db/migrations/*.sql", "dashboard/templates/*.html"]

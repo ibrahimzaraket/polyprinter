@@ -1,0 +1,17 @@
+# Committed defaults. Operator overrides go in config-overrides.yaml
+# (gitignored, written by the Telegram /set command in a later phase).
+
+scout:
+  # Rows requested per (window, orderBy) leaderboard call. Server max is 50
+  # (verified live — see docs/PRD.md §9); values above that are pointless.
+  leaderboard_limit: 50
+  interval_seconds: 86400
+
+db:
+  path: data/polyprinter.db
+
+# Dashboard bind address is intentionally NOT configurable here — it's
+# hardcoded to 127.0.0.1:8765 in dashboard/server.py so a future
+# config-overrides.yaml can't accidentally expose it. See CLAUDE.md.
+
+mode: paper

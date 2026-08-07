@@ -1,0 +1,16 @@
+services:
+  scout:
+    build: .
+    command: ["python", "-m", "polyprinter.scout.run", "--loop"]
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    command: ["python", "-m", "polyprinter.dashboard.server"]
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "127.0.0.1:8765:8765"
+    restart: unless-stopped

@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %} — Traders{% endblock %}
+{% block content %}
+<h1>Traders</h1>
+<p>Ranked by shrunk ROI (sample-size adjusted, k≈30 — see docs/PRD.md §6.2). Raw ROI is shown alongside so you can see how much shrinkage moved a given trader.</p>
+<table>
+  <tr>
+    <th>#</th>
+    <th>Trader</th>
+    <th>ROI (shrunk)</th>
+    <th>ROI (raw)</th>
+    <th>Resolved pos.</th>
+    <th>Win rate</th>
+    <th>Hold-to-resolution</th>
+    <th>Trades 30d</th>
+    <th>Active</th>
+    <th>Source</th>
+  </tr>
+  {% for r in rows %}
+  <tr>
+    <td>{{ loop.index }}</td>
+    <td><a href="/traders/{{ r['address'] }}">{{ r['alias'] or r['address'][:10] + '…' }}</a></td>
+    <td>{{ '%.1f%%' % (r['roi_shrunk'] * 100) if r['roi_shrunk'] is not none else '—' }}</td>
+    <td>{{ '%.1f%%' % (r['roi_raw'] * 100) if r['roi_raw'] is not none else '—' }}</td>
+    <td>{{ r['resolved_positions'] }}</td>
+    <td>{{ '%.0f%%' % (r['win_rate'] * 100) if r['win_rate'] is not none else '—' }}</td>
+    <td>{{ '%.0f%%' % (r['hold_to_resolution_rate'] * 100) if r['hold_to_resolution_rate'] is not none else '—' }}</td>
+    <td>{{ r['trades_30d'] }}</td>
+    <td>{{ '✓' if r['trader_active'] else '—' }}</td>
+    <td>{{ r['discovery_source'] }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="10" class="placeholder">No snapshots yet — run the Scout (`python -m polyprinter.scout.run`).</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

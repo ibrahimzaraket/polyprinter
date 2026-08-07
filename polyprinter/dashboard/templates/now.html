@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %} — Now{% endblock %}
+{% block content %}
+<h1>Now</h1>
+
+<div class="stat-row">
+  <div class="stat"><div class="label">Traders</div><div class="value">{{ trader_count }}</div></div>
+  <div class="stat"><div class="label">Snapshots</div><div class="value">{{ snapshot_count }}</div></div>
+  <div class="stat"><div class="label">Decisions</div><div class="value">{{ decision_count }}</div></div>
+  <div class="stat"><div class="label">Open positions</div><div class="value">{{ open_position_count }}</div></div>
+</div>
+
+<h2>Heartbeats</h2>
+<p>
+  {% if stale %}
+    <span class="stale">{{ stale | length }} service(s) stale (&gt;120s since last beat)</span> —
+    silence here means the service died, not that nothing happened.
+  {% else %}
+    <span class="ok">All known services beating on schedule.</span>
+  {% endif %}
+</p>
+<table>
+  <tr><th>Service</th><th>Last beat</th><th>Detail</th></tr>
+  {% for b in beats %}
+  <tr>
+    <td>{{ b['service'] }}</td>
+    <td>{{ b['last_beat'] }}</td>
+    <td><code>{{ b['detail_json'] }}</code></td>
+  </tr>
+  {% else %}
+  <tr><td colspan="3" class="placeholder">No service has beaten yet.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %} — {{ trader['alias'] or trader['address'] }}{% endblock %}
+{% block content %}
+<p><a href="/traders">&larr; Traders</a></p>
+<h1>{{ trader['alias'] or trader['address'] }}</h1>
+<p><code>{{ trader['address'] }}</code> · first seen {{ trader['first_seen'] }} · discovered via <code>{{ trader['discovery_source'] }}</code> · {{ 'active' if trader['active'] else 'inactive' }}</p>
+
+<h2>Active mandate</h2>
+{% if active_mandate %}
+<p><strong>{{ active_mandate['verdict'] }}</strong> ({{ active_mandate['confidence'] }} confidence) — issued {{ active_mandate['issued_at'] }}, expires {{ active_mandate['expires_at'] }}</p>
+<p>{{ active_mandate['reasoning'] }}</p>
+{% else %}
+<p class="placeholder">No mandate yet — Mandates ship in Phase 3.</p>
+{% endif %}
+
+<h2>Metric history ({{ snapshots | length }} snapshot(s))</h2>
+<table>
+  <tr>
+    <th>Scanned</th><th>ROI shrunk</th><th>ROI raw</th><th>Resolved</th><th>Win rate</th>
+    <th>W/L ratio</th><th>Hold-to-res.</th><th>Median hold (h)</th><th>Concentration top1</th>
+    <th>Sizing CV</th><th>Trades 7d</th><th>Trades 30d</th><th>Open pos.</th>
+  </tr>
+  {% for s in snapshots %}
+  <tr>
+    <td>{{ s['scanned_at'] }}</td>
+    <td>{{ '%.1f%%' % (s['roi_shrunk'] * 100) if s['roi_shrunk'] is not none else '—' }}</td>
+    <td>{{ '%.1f%%' % (s['roi_raw'] * 100) if s['roi_raw'] is not none else '—' }}</td>
+    <td>{{ s['resolved_positions'] }}</td>
+    <td>{{ '%.0f%%' % (s['win_rate'] * 100) if s['win_rate'] is not none else '—' }}</td>
+    <td>{{ '%.2f' % s['win_loss_ratio'] if s['win_loss_ratio'] is not none else '—' }}</td>
+    <td>{{ '%.0f%%' % (s['hold_to_resolution_rate'] * 100) if s['hold_to_resolution_rate'] is not none else '—' }}</td>
+    <td>{{ '%.1f' % s['median_hold_hours'] if s['median_hold_hours'] is not none else '—' }}</td>
+    <td>{{ '%.0f%%' % (s['concentration_top1'] * 100) if s['concentration_top1'] is not none else '—' }}</td>
+    <td>{{ '%.2f' % s['sizing_cv'] if s['sizing_cv'] is not none else '—' }}</td>
+    <td>{{ s['trades_7d'] }}</td>
+    <td>{{ s['trades_30d'] }}</td>
+    <td>{{ s['open_positions'] }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="13" class="placeholder">No snapshots yet.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}

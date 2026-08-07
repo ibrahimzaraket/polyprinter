@@ -1,0 +1,12 @@
+-- Migration 0001 — initial schema.
+--
+-- This file is intentionally a pointer, not a duplicate: the DDL it applies
+-- lives in db/schema.sql (the single source of truth per docs/SCHEMA.md).
+-- db/migrate.py reads schema.sql, rewrites each `CREATE TABLE` /
+-- `CREATE INDEX` to add `IF NOT EXISTS` for idempotent apply, and records
+-- that as migration 1. Keeping one copy of the DDL means schema.sql and the
+-- applied schema can never drift out of sync with each other.
+--
+-- Real migrations from here on (0002+) are ordinary forward-only .sql files
+-- in this directory, applied literally, in numeric order, each in its own
+-- transaction — see db/migrate.py.

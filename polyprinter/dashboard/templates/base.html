@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PolyPrinter{% block title %}{% endblock %}</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font-family: -apple-system, Segoe UI, sans-serif; margin: 0; background: #0b0d10; color: #e4e7eb; }
+  header { background: #14171c; padding: 12px 24px; display: flex; align-items: center; gap: 20px; border-bottom: 1px solid #2a2f38; }
+  header .brand { font-weight: 700; font-size: 1.1em; }
+  header .mode { padding: 2px 8px; border-radius: 4px; font-size: 0.8em; font-weight: 600; background: #3a2f10; color: #e0b84b; }
+  nav a { color: #9aa4b2; text-decoration: none; margin-right: 16px; font-size: 0.92em; }
+  nav a.active, nav a:hover { color: #e4e7eb; }
+  main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 0.88em; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #232830; white-space: nowrap; }
+  th { color: #9aa4b2; font-weight: 600; position: sticky; top: 0; background: #0b0d10; }
+  tr:hover td { background: #14171c; }
+  a { color: #6fb1ff; }
+  .stat-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+  .stat { background: #14171c; border: 1px solid #232830; border-radius: 8px; padding: 14px 18px; min-width: 140px; }
+  .stat .label { color: #9aa4b2; font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.04em; }
+  .stat .value { font-size: 1.6em; font-weight: 700; margin-top: 4px; }
+  .stale { color: #ff6b6b; }
+  .ok { color: #59d499; }
+  .placeholder { color: #9aa4b2; font-style: italic; padding: 40px 0; }
+  code { background: #1a1e24; padding: 1px 5px; border-radius: 3px; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">PolyPrinter</span>
+  <span class="mode">PAPER</span>
+  <nav>
+    <a href="/" class="{{ 'active' if active_tab == 'now' }}">Now</a>
+    <a href="/traders" class="{{ 'active' if active_tab == 'traders' }}">Traders</a>
+    <a href="/decisions" class="{{ 'active' if active_tab == 'decisions' }}">Decisions</a>
+    <a href="/calibration" class="{{ 'active' if active_tab == 'calibration' }}">Calibration</a>
+    <a href="/us-vs-them" class="{{ 'active' if active_tab == 'us_vs_them' }}">Us vs Them</a>
+  </nav>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

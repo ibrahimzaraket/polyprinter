@@ -109,4 +109,10 @@ Resolved market, abbreviated:
 | data-api | `/positions`, `/closed-positions` | 150 req/10s each |
 | gamma-api | `/markets` | 300 req/10s |
 
-Far above what Scout needs at tens-to-low-hundreds of candidates/day.
+Far above what Scout needs at tens-to-low-hundreds of candidates/day *in
+aggregate*. In practice a 429 shows up mid-run anyway: Scout fires many
+requests in a tight loop across candidates with no throttling, and that
+burst pattern can exceed a short 10-second window even when the day's total
+is nowhere near the limit. Confirmed by actually running Scout (not by
+reading this table) — `sources/retry.py` retries 429/5xx with backoff,
+honoring `Retry-After` when present.

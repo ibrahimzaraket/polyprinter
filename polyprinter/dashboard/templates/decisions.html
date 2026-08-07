@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %} — Decisions{% endblock %}
+{% block content %}
+<h1>Decisions</h1>
+<p>Every observed trade lands here, TAKE or SKIP, with a reason — 100% coverage is a hard invariant (docs/SCHEMA.md invariant 1). Empty below is expected until Mirror (Phase 2) starts observing trades.</p>
+<table>
+  <tr>
+    <th>Decided</th><th>Trader</th><th>Verdict</th><th>Reason</th><th>Size</th>
+    <th>Mode</th><th>Side</th><th>Their price</th><th>Latency</th>
+  </tr>
+  {% for r in rows %}
+  <tr>
+    <td>{{ r['decided_at'] }}</td>
+    <td><a href="/traders/{{ r['address'] }}">{{ r['address'][:10] }}…</a></td>
+    <td>{{ r['verdict'] }}</td>
+    <td>{{ r['skip_reason_code'] or '' }} {{ r['skip_reason_text'] or '' }}</td>
+    <td>{{ '$%.2f' % r['size_usd'] if r['size_usd'] is not none else '—' }}</td>
+    <td>{{ r['mode'] }}</td>
+    <td>{{ r['side'] }}</td>
+    <td>{{ r['their_price'] }}</td>
+    <td>{{ r['latency_ms'] }} ms</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="9" class="placeholder">No decisions yet.</td></tr>
+  {% endfor %}
+</table>
+{% endblock %}
