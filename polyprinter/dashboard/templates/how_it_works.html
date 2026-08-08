@@ -5,7 +5,7 @@
 <p>A map of the actual code, function by function — what runs, in what order, and exactly how a decision gets made. Everything below describes what's really in the repo today, not a plan. Terms in <a class="hint" href="/definitions" title="Definitions">?</a> style are explained on the <a href="/definitions">Definitions</a> tab.</p>
 
 <div class="gap-note">
-  <strong>Where things stand right now:</strong> Phase 0 (spine) and Phase 1 (Scout) are fully live. Phase 2 (Mirror) is live in <em>polling, paper</em> mode. Phase 3 (Mandates — an LLM reading each dossier and issuing a real trade verdict) hasn't been built yet, which is why almost every Mirror decision today is <code>SKIP</code> / <code>NO_MANDATE</code> — there's no mandate for it to check yet. That's the correct, expected state, not a bug.
+  <strong>Where things stand right now:</strong> Phase 0 (spine), Phase 1 (Scout), Phase 2 (Mirror, polling/paper), and Phase 3 (Mandates, via an LLM over OpenRouter) are all live. Mandates are real, judged against real dossier numbers, and stored in full — but so far every mandate issued has come back <code>SKIP</code>. That's the model's actual judgment on the current watchlist so far (reasons cited include low hold-to-resolution rates and heavy profit concentration on a handful of trades), not a wiring bug — see the Mandates section below for what a real one looks like. Until a <code>FOLLOW</code> verdict actually gets issued, Mirror's entries still resolve to <code>SKIP</code>/<code>MANDATE_NOT_FOLLOW</code> (or occasionally still <code>NO_MANDATE</code>, for a trader not yet evaluated) — the mechanism is proven, real capital is still nowhere near being risked.
 </div>
 
 <h2>The three services, at a glance</h2>
@@ -110,6 +110,70 @@
   </div>
 </details>
 
+<h2>Mandates — the LLM judgment layer</h2>
+<p>Right after Scout writes each watched trader's snapshot, it asks an LLM (over OpenRouter — user's choice: <code>deepseek/deepseek-v4-flash-0731</code>) to read that dossier and issue a mandate: FOLLOW, WATCH, or SKIP, with a confidence level, optional sizing/price limits, and prose reasoning. There's no separate "mandate service" &mdash; Scout owns the <code>mandates</code> table, so this runs as a step inside Scout's own daily cycle, only for the traders Mirror actually watches (not the full ~200-candidate discovery pool &mdash; a trader ranked #150 will never be mirrored, so a mandate for them is spend with no purpose).</p>
+
+<details class="module-card" open>
+  <summary><span class="module-path">polyprinter/mandate/trigger.py</span><span class="module-summary">— don't ask the LLM about a dossier that hasn't changed</span></summary>
+  <div class="module-body">
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">should_reevaluate<span class="paren">(conn, address, latest_snapshot)</span></div>
+        <div class="fn-desc">Compares the latest snapshot against whatever snapshot the trader's current mandate was issued from. Triggers a new LLM call if either: 5+ newly resolved positions since then, or shrunk ROI / hold-to-resolution rate moved more than 15% relative. Otherwise skips &mdash; daily re-analysis of an unchanged dossier is exactly the budget burn this exists to prevent.</div>
+      </div>
+    </div>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/mandate/prompt.py</span><span class="module-summary">— dossier &rarr; a prompt a model with no prior context can actually use</span></summary>
+  <div class="module-body">
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">build_prompt<span class="paren">(trader, snapshot)</span></div>
+        <div class="fn-desc">Formats one trader's latest dossier into a prompt that explains every term inline &mdash; shrinkage, hold-to-resolution rate, profit concentration, entry price spread, sizing pattern &mdash; in the same plain language as the Definitions tab, then asks for a verdict grounded in those actual numbers.</div>
+      </div>
+    </div>
+    <p class="module-note">Found live: a terse, jargon-only version of this prompt ("22% shrunk ROI, 400 trades...") got misread by the model as confusing rather than informative. The real prompt defines every term before asking anything.</p>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/mandate/schema.py</span><span class="module-summary">— what the model is allowed to say, checked twice</span></summary>
+  <div class="module-body">
+    <p>Two independent representations of the same shape: a hand-written JSON Schema constrains what the model can even generate (via OpenRouter's strict structured-output mode); a pydantic <code>MandateOutput</code> model is a second, independent check on our side. Both matter &mdash; a model can emit schema-valid JSON that's still semantically wrong (e.g. a price floor above its own ceiling), which only the pydantic validator catches.</div>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/mandate/issue.py</span><span class="module-summary">— trigger check &rarr; budget check &rarr; call &rarr; validate &rarr; persist</span></summary>
+  <div class="module-body">
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">maybe_issue_mandate<span class="paren">(conn, log, trader, snapshot, client, daily_budget_usd)</span></div>
+        <div class="fn-desc">The whole sequence, in order: skip if <code>trigger.should_reevaluate</code> says no; skip if today's total LLM spend (summed from <code>llm_calls</code>) has hit the daily cap; otherwise build the prompt, call the LLM, validate the response, and write it to <code>mandates</code> &mdash; superseding whatever mandate was previously active for that trader. Every attempt is logged to <code>llm_calls</code> in full (invariant 4), valid or not. Never raises &mdash; one trader's LLM failure logs and moves on, same discipline as a failed dossier fetch.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">today_llm_spend_usd<span class="paren">(conn)</span></div>
+        <div class="fn-desc">Sums <code>llm_calls.cost_usd</code> for today &mdash; the hard budget cap (<code>config.yaml</code>'s <code>mandate.daily_budget_usd</code>, currently $1/day) checks against this before every call, not after.</div>
+      </div>
+    </div>
+    <p class="module-note">Two real bugs found via live runs, not fixture tests: (1) the configured model is a <em>reasoning</em> model whose reasoning tokens are emitted before the actual answer and count against the token budget &mdash; a short test prompt passed fine, then a real dossier prompt truncated mid-JSON in production. Fixed with a low reasoning-effort setting plus a generous token ceiling. (2) One trader's mandate call used to crash Scout's <em>entire</em> run, discarding an already-good snapshot batch &mdash; the mandate loop lacked the same "one bad item logs and continues" discipline the dossier loop already had. Both fixed the same day they were found.</p>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/sources/openrouter.py</span><span class="module-summary">— the LLM call itself</span></summary>
+  <div class="module-body">
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">complete_json<span class="paren">(prompt, json_schema, schema_name, max_tokens)</span></div>
+        <div class="fn-desc">One chat completion against OpenRouter, constrained to the given schema, with retry on 429/5xx/408 (same <code>sources/retry.py</code> every other client uses) and the raw response persisted before anything parses it &mdash; same structural rule as the Polymarket clients.</div>
+      </div>
+    </div>
+  </div>
+</details>
+
 <h2>Mirror — watches traders and decides what to do</h2>
 <p>Runs every 60 seconds by default. Each cycle: pick which traders to watch, poll each one for anything new, and for every trade found, decide TAKE, SKIP, or MIRROR_EXIT &mdash; and write that decision down, always, no exceptions.</p>
 
@@ -165,9 +229,9 @@
 
     <p><strong>Entry (they BUY)</strong> &mdash; checked in this order, first failure wins:</p>
     <div class="decision-tree">
-      <div class="decision-step"><span class="step-n">1</span><span class="step-code">NO_MANDATE</span><span class="step-text">No mandate has ever been issued for this trader. <strong>This is what almost every decision hits today</strong> &mdash; Mandates are Phase 3, not built yet.</span></div>
+      <div class="decision-step"><span class="step-n">1</span><span class="step-code">NO_MANDATE</span><span class="step-text">No mandate has ever been issued for this trader yet &mdash; either they haven't reached the watchlist's mandate pass, or Scout hasn't run since they joined it.</span></div>
       <div class="decision-step"><span class="step-n">2</span><span class="step-code">MANDATE_EXPIRED</span><span class="step-text">A mandate exists but its <code>expires_at</code> has passed.</span></div>
-      <div class="decision-step"><span class="step-n">3</span><span class="step-code">MANDATE_NOT_FOLLOW</span><span class="step-text">The active mandate's verdict is WATCH or SKIP, not FOLLOW.</span></div>
+      <div class="decision-step"><span class="step-n">3</span><span class="step-code">MANDATE_NOT_FOLLOW</span><span class="step-text">The active mandate's verdict is WATCH or SKIP, not FOLLOW. <strong>This is what most decisions hit right now</strong> &mdash; every real mandate issued so far has come back SKIP.</span></div>
       <div class="decision-step"><span class="step-n">4</span><span class="step-code">PRICE_BAND</span><span class="step-text">Entry price falls outside the mandate's min/max entry-price band.</span></div>
       <div class="decision-step"><span class="step-n">5</span><span class="step-code">NO_CAPITAL</span><span class="step-text">Not enough of the paper bankroll left free (sizing.py's <code>available_capital_usd</code>).</span></div>
       <div class="decision-step"><span class="step-n">6</span><span class="step-code">PORTFOLIO_CAP</span><span class="step-text">Would push total open exposure past the portfolio-wide cap.</span></div>
@@ -224,7 +288,7 @@
         <div class="fn-desc">Given an order book, spends our size level-by-level (crossing the spread), applies a taker fee, and returns the real average price we'd have paid &mdash; never assumes we got their exact price.</div>
       </div>
     </div>
-    <p class="module-note">Deliberately not connected to a live order book yet: there's no verified-live Polymarket order-book endpoint in this project, and it wouldn't matter yet anyway &mdash; fills only apply to a TAKE, and no TAKE can happen until Phase 3 exists. Built and unit-tested now so it's ready the moment either changes.</p>
+    <p class="module-note">Deliberately not connected to a live order book yet: there's no verified-live Polymarket order-book endpoint in this project, and it still doesn't matter in practice &mdash; fills only apply to a TAKE, and no mandate has issued a FOLLOW verdict yet (Phase 3 exists now, but real judgment so far has been SKIP every time — see the Mandates section). Built and unit-tested now so it's ready the moment either changes.</p>
   </div>
 </details>
 
@@ -242,7 +306,7 @@
   <div class="decision-step"><span class="step-n">2</span><span class="step-text"><code>poll_trader</code> asks Polymarket for <code>0xabc</code>'s activity since we last checked. It comes back with one new <code>TRADE</code>: BUY 40 shares at 55&cent; in some market.</span></div>
   <div class="decision-step"><span class="step-n">3</span><span class="step-text"><code>running_position</code> replays 0xabc's prior trades in that same token to work out what they held right before this one.</span></div>
   <div class="decision-step"><span class="step-n">4</span><span class="step-text">An <code>observed_trades</code> row is inserted &mdash; the permanent record that this trade happened and when we saw it.</span></div>
-  <div class="decision-step"><span class="step-n">5</span><span class="step-text"><code>decide()</code> sees it's a BUY, calls <code>decide_entry</code>. It looks up 0xabc's active mandate &mdash; finds none (Phase 3 isn't built) &mdash; and returns <code>SKIP</code> / <code>NO_MANDATE</code> immediately, without ever reaching the price-band or sizing checks.</span></div>
+  <div class="decision-step"><span class="step-n">5</span><span class="step-text"><code>decide()</code> sees it's a BUY, calls <code>decide_entry</code>. It looks up 0xabc's active mandate. If Scout hasn't evaluated them yet, that's <code>SKIP</code> / <code>NO_MANDATE</code>. If it has (the common case now), the mandate's own verdict gets checked &mdash; and since every real mandate issued so far has come back SKIP, this almost always ends as <code>SKIP</code> / <code>MANDATE_NOT_FOLLOW</code> instead, without ever reaching the price-band or sizing checks.</span></div>
   <div class="decision-step"><span class="step-n">6</span><span class="step-text">A <code>decisions</code> row is inserted, linked to that exact <code>observed_trades</code> row, with the reason recorded in plain text.</span></div>
   <div class="decision-step"><span class="step-n">7</span><span class="step-text">The next time you load <code>/decisions</code>, that row is right there &mdash; trader, verdict, reason, latency &mdash; because the dashboard reads the same database file, live, on every request.</span></div>
 </div>
@@ -272,7 +336,7 @@
   <tr><th>Table</th><th>Owner</th><th>What it holds</th></tr>
   <tr><td><code>traders</code></td><td>Scout</td><td>Every address ever discovered, and how.</td></tr>
   <tr><td><code>trader_snapshots</code></td><td>Scout</td><td>One append-only dossier per scan &mdash; a trader's full metric history over time.</td></tr>
-  <tr><td><code>mandates</code></td><td>Phase 3 (none yet)</td><td>LLM-issued FOLLOW/WATCH/SKIP verdicts. Empty today.</td></tr>
+  <tr><td><code>mandates</code></td><td>Scout (Phase 3)</td><td>LLM-issued FOLLOW/WATCH/SKIP verdicts, one per trader Mirror watches, re-issued when the dossier materially changes.</td></tr>
   <tr><td><code>observed_trades</code></td><td>Mirror</td><td>Every trade Mirror has ever seen a watched trader make.</td></tr>
   <tr><td><code>decisions</code></td><td>Mirror</td><td>Exactly one row per <code>observed_trades</code> row &mdash; TAKE, SKIP, or MIRROR_EXIT, with a reason.</td></tr>
   <tr><td><code>positions</code> / <code>position_exits</code></td><td>Mirror</td><td>Our own paper positions, and each partial exit against them. Empty today &mdash; nothing has been TAKEn yet.</td></tr>
@@ -295,6 +359,7 @@
 
 <h2>What's real vs. what's still a documented gap</h2>
 <div class="gap-note"><strong>Live and real:</strong> trader discovery &amp; scoring (Scout), shrinkage-adjusted ranking, real-time trade detection &amp; decision-writing (Mirror), all of it against live Polymarket data, all of it verified by 45 passing tests plus real end-to-end runs.</div>
-<div class="gap-note"><strong>Structurally waiting on Phase 3:</strong> every entry decision (no mandate exists to authorise a TAKE yet), fill simulation (only matters once a TAKE can happen), category/liquidity mandate rules (need a per-market lookup that isn't built).</div>
-<div class="gap-note"><strong>Not started:</strong> Phase 3 (Mandates/LLM), Phase 4 (on-chain event stream, replacing polling), Phase 5 (Learner, calibration, shadow benchmark), Phase 6 (live trading).</div>
+<div class="gap-note"><strong>Live and real, added Phase 3:</strong> LLM mandate issuance against real dossiers, over OpenRouter, with full prompt/response logging (invariant 4) and a hard daily spend cap — real judgment, real reasoning grounded in real numbers, verified against live runs (including two bugs found and fixed the same day: a reasoning-model token budget pitfall, and a crash-the-whole-batch bug in the mandate loop).</div>
+<div class="gap-note"><strong>Waiting on an actual FOLLOW verdict:</strong> every entry decision still resolves to SKIP in practice — not because the mechanism is missing, but because every real mandate issued so far genuinely came back SKIP. Fill simulation and any real paper position both wait on the first FOLLOW. Category/liquidity mandate rules stay unenforced regardless (need a per-market gamma-api lookup that isn't built).</div>
+<div class="gap-note"><strong>Not started:</strong> Phase 4 (on-chain event stream, replacing polling), Phase 5 (Learner, calibration, shadow benchmark), Phase 6 (live trading).</div>
 {% endblock %}
