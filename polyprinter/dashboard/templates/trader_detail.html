@@ -22,9 +22,27 @@
 <div class="page-lede">
   <h1>{{ trader['alias'] or trader['address'] }}</h1>
   {% if trader['active'] %}<span class="badge badge-good"><span class="glyph">&#10003;</span>Active</span>{% else %}<span class="badge badge-neutral">Inactive</span>{% endif %}
-  {% if is_tailed %}<span class="badge badge-good" title="Currently watched by Mirror — every trade they make gets a decision">&#128065; Tailed</span>{% endif %}
+  {% if is_tailed %}<span class="badge badge-good" title="Manually pinned — Mirror always watches them">&#128065; Tailed</span>{% endif %}
+  {% if active_mandate and active_mandate['issued_by'] == 'operator' and active_mandate['fast_lane'] %}<span class="badge badge-good" title="On-chain detection drives their trades directly, not the ~60s polling path">&#9889; Fast lane</span>{% endif %}
 </div>
 <p><code>{{ trader['address'] }}</code> &middot; first seen {{ trader['first_seen'] }} &middot; discovered via <code>{{ trader['discovery_source'] }}</code></p>
+
+<p>
+  {% if is_tailed %}
+  <form method="post" action="/traders/{{ trader['address'] }}/untail" style="display:inline;">
+    <button type="submit">Untail</button>
+  </form>
+  {% else %}
+  <form method="post" action="/traders/{{ trader['address'] }}/tail" style="display:inline;">
+    <button type="submit">Tail this trader</button>
+  </form>
+  {% endif %}
+  {% if strategy_configured %}
+  <form method="post" action="/traders/{{ trader['address'] }}/analyze" style="display:inline;">
+    <button type="submit">{{ 'Re-analyze' if latest and latest['strategy_summary'] else 'Analyze strategy' }}</button>
+  </form>
+  {% endif %}
+</p>
 
 <h2>Strategy, in plain English</h2>
 {% if latest and latest['strategy_summary'] %}
@@ -37,9 +55,38 @@
 <div class="empty-state">
   <div class="glyph">&#129504;</div>
   <div class="headline">No narrative generated yet</div>
-  <p>An LLM writes a plain-English explanation of what this trader is actually doing (not whether to follow them) once Scout evaluates their dossier — needs <code>OPENROUTER_API_KEY</code>/<code>OPENROUTER_MODEL</code> configured and a Scout run to have reached this trader.</p>
+  <p>{% if strategy_configured %}Click "Analyze strategy" above — an LLM will read this dossier and write a plain-English explanation of what they're actually doing (not whether to follow them). Generated on request only, not automatically, so it only costs a call when you actually want to know.{% else %}Needs <code>OPENROUTER_API_KEY</code>/<code>OPENROUTER_MODEL</code> configured.{% endif %}</p>
 </div>
 {% endif %}
+
+<h2>Your tailing controls</h2>
+<div class="card">
+  {% if not is_tailed %}
+  <p>Tail this trader first (button above) before setting a mandate — a mandate without tailing has nothing to act on.</p>
+  {% else %}
+  <form method="post" action="/traders/{{ trader['address'] }}/mandate">
+    <p>
+      <label>Size multiplier
+        <input type="number" name="size_multiplier" step="0.1" min="0.1"
+               value="{{ active_mandate['size_multiplier'] if active_mandate and active_mandate['issued_by'] == 'operator' and active_mandate['size_multiplier'] else '1.0' }}">
+      </label>
+      — 1.0 mirrors their bet-as-%-of-their-balance exactly with the same %-of-your-balance; 0.5 mirrors at half conviction, 2.0 amplifies.
+    </p>
+    <p>
+      <label><input type="checkbox" name="fast_lane"
+             {% if active_mandate and active_mandate['issued_by'] == 'operator' and active_mandate['fast_lane'] %}checked{% endif %}>
+        Fast lane — on-chain detection drives their trades directly (seconds, not up to ~60s)
+      </label>
+    </p>
+    <button type="submit">{{ 'Update mandate' if active_mandate and active_mandate['issued_by'] == 'operator' else 'Authorize tailing (paper)' }}</button>
+  </form>
+  {% if active_mandate and active_mandate['issued_by'] == 'operator' %}
+  <form method="post" action="/traders/{{ trader['address'] }}/mandate/revoke" style="margin-top: var(--sp-2);">
+    <button type="submit">Revoke mandate</button>
+  </form>
+  {% endif %}
+  {% endif %}
+</div>
 
 <h2>Active mandate</h2>
 {% if active_mandate %}
@@ -47,6 +94,7 @@
   <p style="margin-bottom: var(--sp-2);">
     <span class="badge {{ 'badge-good' if active_mandate['verdict'] == 'FOLLOW' else 'badge-critical' if active_mandate['verdict'] == 'SKIP' else 'badge-warning' }}">{{ active_mandate['verdict'] }}</span>
     <span class="badge badge-neutral">{{ active_mandate['confidence'] }} confidence</span>
+    <span class="badge badge-neutral">{{ 'Operator-issued' if active_mandate['issued_by'] == 'operator' else 'LLM-issued' }}</span>
     <span style="color: var(--text-muted); font-size: var(--text-sm);">issued {{ active_mandate['issued_at'] }} &middot; expires {{ active_mandate['expires_at'] }}</span>
   </p>
   <p style="color: var(--text);">{{ active_mandate['reasoning'] }}</p>
@@ -55,7 +103,7 @@
 <div class="empty-state">
   <div class="glyph">&#128203;</div>
   <div class="headline">No mandate yet</div>
-  <p>Mandates ship in Phase 3 — an LLM will read this dossier and issue a FOLLOW/WATCH/SKIP verdict with reasoning.</p>
+  <p>Either an LLM issues one (Phase 3, for the auto-ranked watchlist) or you do (above, for anyone you tail directly).</p>
 </div>
 {% endif %}
 

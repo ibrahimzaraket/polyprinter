@@ -1,14 +1,17 @@
-"""Generates a plain-English strategy narrative for a trader's just-written
-snapshot (FR-3/FR-4's dossier work, extended — not a new phase: this is
-read-only explanation on top of data Scout already computes, touches
-nothing in Mirror/decide/execute).
+"""Generates a plain-English strategy narrative for a trader's snapshot
+(FR-3/FR-4's dossier work, extended — not a new phase: this is read-only
+explanation on top of data Scout already computes, touches nothing in
+Mirror/decide/execute).
 
-Runs for every trader Scout keeps (lifetime-profitable, or pinned, or
-already acted on — see scout/prune.py), not just Mirror's watchlist, so
-any trader visible on /traders can be understood, not only the ones being
-tailed. Same delta-trigger discipline as mandate/trigger.py (FR-5): only
-worth an LLM call when the dossier materially changed since the last
-narrative, not every single day for an unchanged trader.
+On-demand only (changed 2026-08-08, operator's explicit correction): the
+first version of this ran automatically for every trader Scout kept, every
+run. That burned real token spend on traders nobody had asked about — the
+only caller now is the dashboard's /traders/<address>/analyze route,
+passing force=True. There is no automatic per-Scout-run pass anymore. The
+delta-trigger (should_regenerate, same discipline as mandate/trigger.py's
+FR-5) still exists and still guards a non-forced call, but nothing in this
+codebase makes a non-forced call today — it's there for a future caller
+that isn't purely operator-driven, not exercised by the current one.
 
 Same audit discipline as mandate/issue.py too: every attempt logged to
 llm_calls in full (invariant 4), purpose='strategy' so its budget
@@ -125,6 +128,7 @@ def maybe_generate_strategy(
     snapshot: sqlite3.Row,
     client: OpenRouterClient,
     daily_budget_usd: float,
+    force: bool = False,
 ) -> str:
     """Returns a short outcome string for logging/testing:
     "skipped:<reason>" | "generated" | "invalid:<error>" | "error:<exc>".
@@ -135,11 +139,22 @@ def maybe_generate_strategy(
     there's no "trajectory" being rewritten, just finishing what that
     insert started. Every later snapshot still gets its own independent
     narrative, never edited after the fact.
+
+    `force=True` (the dashboard's /traders/<address>/analyze route —
+    operator's explicit choice, 2026-08-08: analyze who I choose, not
+    everyone, so we don't burn tokens on traders I never accepted)
+    bypasses should_regenerate() entirely. The click IS the trigger; there
+    is no automatic per-Scout-run pass anymore — see this module's own
+    docstring and scout/run.py's history for what used to call this
+    unconditionally for every kept trader.
     """
     address = trader["address"]
     model = client.model
 
-    should_call, trigger_reason = should_regenerate(conn, address, snapshot)
+    if force:
+        should_call, trigger_reason = True, "operator requested (force)"
+    else:
+        should_call, trigger_reason = should_regenerate(conn, address, snapshot)
     if not should_call:
         log.info("strategy.skipped", address=address, reason=trigger_reason)
         return f"skipped:{trigger_reason}"

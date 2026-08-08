@@ -30,7 +30,6 @@ from polyprinter.scout.discover import discover_candidates, upsert_traders
 from polyprinter.scout.dossier import compute_dossier
 from polyprinter.scout import prune
 from polyprinter.scout.shrinkage import population_mean, shrink
-from polyprinter.scout.strategy import maybe_generate_strategy
 from polyprinter.sources.openrouter import OpenRouterClient
 from polyprinter.sources.polymarket_data import PolymarketDataClient
 
@@ -140,45 +139,6 @@ def _issue_mandates_for_watchlist(
     return n_issued
 
 
-def _generate_strategies(
-    conn: sqlite3.Connection, log: Logger, *, addresses: list[str], daily_budget_usd: float
-) -> int:
-    """Plain-English strategy narrative for every trader Scout kept this
-    run (lifetime-profitable, or exempted from prune.py's purge) — not
-    just Mirror's watchlist, so any trader on /traders can be explained,
-    not only the ~20 being tailed. Same no-op-if-unconfigured and
-    per-trader-failure-isolation discipline as _issue_mandates_for_watchlist
-    above; see scout/strategy.py for the actual generation logic.
-    """
-    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    model = os.environ.get("OPENROUTER_MODEL", "").strip()
-    if not api_key or not model:
-        log.info("strategy.disabled", reason="OPENROUTER_API_KEY or OPENROUTER_MODEL not set")
-        return 0
-
-    n_generated = 0
-    with OpenRouterClient(conn, api_key=api_key, model=model) as client:
-        for address in addresses:
-            trader = conn.execute("SELECT * FROM traders WHERE address = ?", (address,)).fetchone()
-            snapshot = conn.execute(
-                "SELECT * FROM trader_snapshots WHERE address = ? ORDER BY scanned_at DESC LIMIT 1",
-                (address,),
-            ).fetchone()
-            if trader is None or snapshot is None:
-                continue
-            try:
-                outcome = maybe_generate_strategy(
-                    conn, log, trader=trader, snapshot=snapshot, client=client, daily_budget_usd=daily_budget_usd,
-                )
-            except Exception as exc:  # noqa: BLE001 — one bad trader must not kill the rest of the batch
-                log.error("strategy.unexpected_failure", address=address, error=str(exc))
-                continue
-            if outcome == "generated":
-                n_generated += 1
-            conn.commit()
-    return n_generated
-
-
 def run_once(
     conn: sqlite3.Connection,
     log: Logger,
@@ -253,8 +213,9 @@ def run_once(
     conn.commit()
 
     n_mandates = _issue_mandates_for_watchlist(conn, log, watchlist_limit=mandate_watchlist_limit)
-    strategy_daily_budget = config.get("strategy", {}).get("daily_budget_usd", 1.0)
-    n_strategies = _generate_strategies(conn, log, addresses=kept_addresses, daily_budget_usd=strategy_daily_budget)
+    # Strategy narratives are on-demand only now (dashboard's /analyze
+    # route, operator's explicit choice, 2026-08-08) — no automatic pass
+    # here anymore. See scout/strategy.py's module docstring.
 
     n_kept = len(kept_addresses)
     log.info(
@@ -262,7 +223,6 @@ def run_once(
         n_snapshotted=n_kept,
         n_purged_unprofitable=n_purged,
         n_mandates_issued=n_mandates,
-        n_strategies_generated=n_strategies,
     )
     return n_kept
 

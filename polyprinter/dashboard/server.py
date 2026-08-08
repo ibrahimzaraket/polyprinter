@@ -1,21 +1,37 @@
 """Dashboard server. Reads the DB directly (FR-27) — never generate-and-push.
-Bound to 127.0.0.1:8765 only; reached over a tunnel, not exposed. Dashboard
-is read-only (invariant 5) — no writes happen from this process except its
-own heartbeat.
+Bound to 127.0.0.1:8765 only; reached over a tunnel, not exposed to the
+public internet.
+
+Invariant 5 ("dashboard reads only") is deliberately relaxed as of
+2026-08-08, for a narrow, named set of operator actions — tail/untail a
+trader, issue/revoke an operator mandate, force a strategy narrative (see
+the routes below, all POST, all under /traders/<address>/...). This is a
+conscious reversal, not scope creep: CLAUDE.md's "no write-capable public
+surface" concern was about a PUBLIC hole; this server has never been
+public, only reachable over the operator's own private Tailscale tunnel,
+and every write here is something the operator explicitly clicked, not
+something the dashboard decides on its own. Every other route stays
+exactly as read-only as before.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 
-from flask import Flask, abort, g, render_template
+from flask import Flask, abort, g, redirect, render_template, request, url_for
 
+from polyprinter import config_write
 from polyprinter.config import load_config
 from polyprinter.db.conn import get_connection
-from polyprinter.mirror.watch_poll import select_watchlist
+from polyprinter.mandate import operator as operator_mandate
+from polyprinter.mirror.watch_poll import ensure_pinned_traders_exist, select_watchlist
 from polyprinter.obs import heartbeat
+from polyprinter.obs.log import Logger
+from polyprinter.scout.strategy import maybe_generate_strategy
+from polyprinter.sources.openrouter import OpenRouterClient
 
 SERVICE = "dashboard"
 # Bind 0.0.0.0 *inside* the container — Docker's port-forwarding arrives via
@@ -369,7 +385,8 @@ def trader_detail(address: str) -> str:
 
     recent_trades = _recent_trades(conn, address)
     pnl_by_market = _pnl_by_market(conn, address)
-    is_tailed = address in _current_watchlist(conn)
+    is_tailed = config_write.is_pinned(address)  # pin status, not watchlist membership — see routes below
+    strategy_configured = bool(os.environ.get("OPENROUTER_API_KEY", "").strip() and os.environ.get("OPENROUTER_MODEL", "").strip())
 
     return render_template(
         "trader_detail.html",
@@ -382,8 +399,94 @@ def trader_detail(address: str) -> str:
         pnl_by_market=pnl_by_market,
         active_mandate=active_mandate,
         is_tailed=is_tailed,
+        strategy_configured=strategy_configured,
         active_tab="traders",
     )
+
+
+# ─── Write routes (2026-08-08) ─────────────────────────────────────────
+# See this module's own docstring for why the dashboard has these at all.
+# Every one of them is a POST, redirects back to the trader's own page on
+# success, and does the smallest possible write for what it's named —
+# no route here does more than one of "pin", "unpin", "issue a mandate",
+# "revoke a mandate", "generate a narrative".
+
+@app.route("/traders/<address>/tail", methods=["POST"])
+def tail_trader(address: str):
+    address = address.lower()
+    conn = get_db()
+    trader = conn.execute("SELECT 1 FROM traders WHERE address = ?", (address,)).fetchone()
+    if trader is None:
+        abort(404)
+    config_write.add_pinned(address)
+    ensure_pinned_traders_exist(conn)  # FK-safe before the next Mirror/Scout cycle even runs
+    conn.commit()
+    return redirect(url_for("trader_detail", address=address))
+
+
+@app.route("/traders/<address>/untail", methods=["POST"])
+def untail_trader(address: str):
+    address = address.lower()
+    conn = get_db()
+    config_write.remove_pinned(address)
+    operator_mandate.revoke(conn, address=address)  # stop trading them too, not just stop watching
+    conn.commit()
+    return redirect(url_for("trader_detail", address=address))
+
+
+@app.route("/traders/<address>/mandate", methods=["POST"])
+def set_mandate(address: str):
+    address = address.lower()
+    conn = get_db()
+    trader = conn.execute("SELECT 1 FROM traders WHERE address = ?", (address,)).fetchone()
+    if trader is None:
+        abort(404)
+    if not config_write.is_pinned(address):
+        abort(400, "Tail this trader before setting a mandate.")
+    try:
+        size_multiplier = float(request.form.get("size_multiplier", "1.0"))
+    except ValueError:
+        abort(400, "size_multiplier must be a number.")
+    fast_lane_on = request.form.get("fast_lane") == "on"
+    try:
+        operator_mandate.issue(conn, address=address, size_multiplier=size_multiplier, fast_lane=fast_lane_on)
+    except ValueError as exc:
+        abort(400, str(exc))
+    conn.commit()
+    return redirect(url_for("trader_detail", address=address))
+
+
+@app.route("/traders/<address>/mandate/revoke", methods=["POST"])
+def revoke_mandate(address: str):
+    address = address.lower()
+    conn = get_db()
+    operator_mandate.revoke(conn, address=address)
+    conn.commit()
+    return redirect(url_for("trader_detail", address=address))
+
+
+@app.route("/traders/<address>/analyze", methods=["POST"])
+def analyze_trader(address: str):
+    address = address.lower()
+    conn = get_db()
+    trader = conn.execute("SELECT * FROM traders WHERE address = ?", (address,)).fetchone()
+    snapshot = conn.execute(
+        "SELECT * FROM trader_snapshots WHERE address = ? ORDER BY scanned_at DESC LIMIT 1", (address,)
+    ).fetchone()
+    if trader is None or snapshot is None:
+        abort(404)
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    model = os.environ.get("OPENROUTER_MODEL", "").strip()
+    if not api_key or not model:
+        abort(503, "OPENROUTER_API_KEY/OPENROUTER_MODEL not configured — strategy analysis is unavailable.")
+    strategy_budget = load_config().get("strategy", {}).get("daily_budget_usd", 1.0)
+    with OpenRouterClient(conn, api_key=api_key, model=model) as client:
+        maybe_generate_strategy(
+            conn, Logger("dashboard", conn), trader=trader, snapshot=snapshot,
+            client=client, daily_budget_usd=strategy_budget, force=True,
+        )
+    conn.commit()
+    return redirect(url_for("trader_detail", address=address))
 
 
 @app.route("/decisions")
@@ -425,7 +528,15 @@ def how_it_works() -> str:
 def main() -> None:
     conn = get_connection()  # ensure schema exists before serving
     conn.close()
-    app.run(host=HOST, port=PORT)
+    # threaded=True matters now that a route can block for a while (the
+    # /analyze route's synchronous LLM call has taken up to ~90s observed
+    # live) — without it, Flask's dev server is single-threaded and that
+    # one request would freeze the entire dashboard, not just that tab,
+    # for everyone, for the duration of the call. Each request already
+    # gets its own SQLite connection (get_db()'s per-request g.db), and
+    # WAL mode (db/conn.py) is built for concurrent readers/writers, so
+    # this is safe, not just convenient.
+    app.run(host=HOST, port=PORT, threaded=True)
 
 
 if __name__ == "__main__":
