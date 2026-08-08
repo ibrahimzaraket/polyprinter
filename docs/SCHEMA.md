@@ -45,12 +45,14 @@ polyprinter/
 │   │   └── trigger.py          # delta-detection (FR-5)
 │   │
 │   ├── mirror/
-│   │   ├── watch_poll.py       # phase 2: polling
-│   │   ├── watch_events.py     # phase 4: on-chain
+│   │   ├── watch_poll.py       # phase 2: polling (drives real decisions)
+│   │   ├── watch_events.py     # phase 4: on-chain (detects only, doesn't drive)
+│   │   ├── diff_report.py      # phase 4: chain vs poll agreement (exit criterion)
 │   │   ├── position_model.py   # THEIR running position per token (FR-12)
 │   │   ├── decide.py           # mandate lookup + caps → TAKE/SKIP
+│   │   ├── execute.py          # decide.py's verdict → real positions/exits
 │   │   ├── sizing.py           # per-trade, portfolio, correlation caps
-│   │   └── fills.py            # book-walk simulation
+│   │   └── fills.py            # book-walk simulation + approximate_fill stand-in
 │   │
 │   ├── learner/
 │   │   ├── calibrate.py

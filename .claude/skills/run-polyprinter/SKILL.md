@@ -7,14 +7,36 @@ PolyPrinter is a three-service Docker Compose app: `scout` (a batch job
 that pulls live Polymarket data, computes trader dossiers, AND — Phase 3 —
 issues an LLM mandate for any watched trader whose dossier materially
 changed), `mirror` (polling-mode trade detection against Scout's current
-watchlist — Phase 2, paper only), and `dashboard` (a read-only Flask
-server on `127.0.0.1:8765`). Mandates run *inside* the scout service, not
-as a separate container — Scout owns the `mandates` table (docs/SCHEMA.md
+watchlist — Phase 2, paper, the only path that actually drives decisions —
+AND, if `POLYGON_RPC_URL` is set, Phase 4's on-chain event detector
+running alongside it in the same tick, watching but not deciding — see
+`mirror/watch_events.py`), and `dashboard` (a read-only Flask server on
+`127.0.0.1:8765`). Mandates run *inside* the scout service, not as a
+separate container — Scout owns the `mandates` table (docs/SCHEMA.md
 invariant 5). Drive it with `.claude/skills/run-polyprinter/driver.sh` —
 a curl-based smoke script that builds, launches, seeds the Phase 0
 fixture, runs Scout and Mirror against **live** Polymarket data, and
 asserts on every dashboard route. All paths below are relative to the
 repo root (`/opt/polyprinter`), not to this skill directory.
+
+To check Phase 4's diff-harness progress (its exit criterion is 72h clean,
+per PRD §7):
+
+```bash
+docker compose exec dashboard python -c "
+import sqlite3
+from polyprinter.mirror import diff_report
+conn = sqlite3.connect('data/polyprinter.db'); conn.row_factory = sqlite3.Row
+r = diff_report.compute_diff(conn, since_iso='2026-08-01T00:00:00+00:00')
+print(r['n_chain'], r['n_poll'], r['n_matched'], len(r['chain_only']), len(r['poll_only']))
+"
+```
+
+`chain_only` (detected on-chain, missing from polling) is the concerning
+direction. `poll_only` is expected to be nonzero for a while — the chain
+watcher only started watching from whenever it was first deployed, not
+backfilled, so anything polling recorded before that has no chain-side
+counterpart to match.
 
 ## Prerequisites
 
@@ -186,6 +208,26 @@ invariant checks.
   the prune step working, not data loss. Anyone ever mandated or watched
   by Mirror is exempt regardless of profitability (`has_been_acted_upon`)
   — decision/audit history is never touched by this.
+
+- **An `OrderFilled` event's `taker` field is sometimes the exchange
+  contract itself, not a second trader.** The CTF Exchange V2 contract
+  emits two `OrderFilled` events per match (one for the maker order, one
+  for the taker's own order), and in the taker's-own-order emission,
+  `taker` = `address(this)`. Only `maker` (topics[2]) is ever a real
+  trader's own address in every emission — filter/match on that, never
+  `taker`. Verified live 2026-08-08 by decoding two real transactions
+  against the contract's own source and cross-checking every field
+  against `data-api`; see `sources/chain.py`'s module docstring.
+
+- **Phase 4's event detector deliberately does not write to
+  `observed_trades` or call `decide()`/`execute()`.** It only logs
+  detections (as `events` rows) for `diff_report.py` to compare against
+  polling. Wiring it into real decisions before the 72h clean-diff
+  criterion is met would double-book the paper portfolio — polling's
+  `log_index` is synthetic (assigned in the order poll saw entries) while
+  the chain's is the real on-chain value, so the two almost never collide
+  on `observed_trades`' `UNIQUE(tx_hash, log_index)`, and both paths would
+  happily act on the same real trade independently.
 
 - **`raw_responses` used to grow unbounded from exact duplicates.** Scout
   has no incremental cursor the way Mirror's `watch_poll.py` does, so a

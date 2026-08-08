@@ -197,11 +197,28 @@ data-api general 1000 req/10s, `/trades` 200/10s, `/positions` and
 scale (tens to low hundreds of candidates/day) this is not a real
 constraint — no backoff strategy needed for Phase 1.
 
-### Still genuinely open (deferred to Phase 2/4, not blocking Phase 0/1)
+### Resolved 2026-08-08 (Phase 4 build)
 
-- Whether `OrderFilled` events cleanly identify the user address (proxy or
-  EOA) and trade direction on-chain, or whether the maker side is the
-  matching operator — this requires decoding a live Polygon event, which the
-  Scout (HTTP-only) never touches. Verify when Mirror (phase 2) is built.
-- RPC provider free-tier limits — irrelevant until phase 4 (event stream);
-  Scout and Mirror-polling use HTTP APIs only, no RPC calls.
+- ~~Whether `OrderFilled` events cleanly identify the user address (proxy
+  or EOA) and trade direction on-chain, or whether the maker side is the
+  matching operator~~ — **resolved, and the naive reading was wrong.**
+  The CTF Exchange V2 contract (`0xE111180000d2663C0091e4f400237545B87B996B`,
+  migrated from the old `0x4bFb41d5...` address 2026-04-28) emits TWO
+  `OrderFilled` events per match — one for the maker order, one for the
+  taker's own order — and in the taker's-own-order emission, `taker` is
+  literally `address(this)` (the exchange contract), not a second real
+  trader. `maker` is always a real trader's own proxy-wallet address in
+  every emission, confirmed against the contract's own source
+  (github.com/Polymarket/ctf-exchange-v2) and by decoding two real live
+  transactions and matching every field against `data-api`'s `/activity`
+  response for the same `transactionHash`. See `sources/chain.py`'s module
+  docstring for the full writeup. **Rule: always filter/match on `maker`,
+  never `taker`.**
+
+### Still genuinely open
+
+- RPC provider free-tier limits — chain.py currently runs against a free
+  public endpoint (polygon-bor-rpc.publicnode.com, no API key). Fine for
+  the Phase 4 diff-harness stage; worth revisiting if it proves unreliable
+  under sustained load once/if event detection is ever cut over to drive
+  real decisions.

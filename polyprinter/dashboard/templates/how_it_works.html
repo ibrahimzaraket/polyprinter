@@ -5,7 +5,7 @@
 <p>A map of the actual code, function by function — what runs, in what order, and exactly how a decision gets made. Everything below describes what's really in the repo today, not a plan. Terms in <a class="hint" href="/definitions" title="Definitions">?</a> style are explained on the <a href="/definitions">Definitions</a> tab.</p>
 
 <div class="gap-note">
-  <strong>Where things stand right now:</strong> Phase 0 (spine), Phase 1 (Scout), Phase 2 (Mirror, polling/paper), and Phase 3 (Mandates, via an LLM over OpenRouter) are all live. Mandates are real, judged against real dossier numbers, and stored in full — but so far every mandate issued has come back <code>SKIP</code>. That's the model's actual judgment on the current watchlist so far (reasons cited include low hold-to-resolution rates and heavy profit concentration on a handful of trades), not a wiring bug — see the Mandates section below for what a real one looks like. Until a <code>FOLLOW</code> verdict actually gets issued, Mirror's entries still resolve to <code>SKIP</code>/<code>MANDATE_NOT_FOLLOW</code> (or occasionally still <code>NO_MANDATE</code>, for a trader not yet evaluated) — the mechanism is proven, real capital is still nowhere near being risked.
+  <strong>Where things stand right now:</strong> Phase 0 (spine), Phase 1 (Scout), Phase 2 (Mirror, polling/paper), and Phase 3 (Mandates, via an LLM over OpenRouter) are all live. Mandates are real, judged against real dossier numbers, and stored in full — but so far every mandate issued has come back <code>SKIP</code>. That's the model's actual judgment on the current watchlist so far (reasons cited include low hold-to-resolution rates and heavy profit concentration on a handful of trades), not a wiring bug — see the Mandates section below for what a real one looks like. Until a <code>FOLLOW</code> verdict actually gets issued, Mirror's entries still resolve to <code>SKIP</code>/<code>MANDATE_NOT_FOLLOW</code> (or occasionally still <code>NO_MANDATE</code>, for a trader not yet evaluated) — the mechanism is proven, real capital is still nowhere near being risked. Phase 4 (on-chain event detection) is under way: it watches the same traders directly on Polygon and logs what it sees for comparison, but it does <strong>not</strong> drive any decision yet — polling stays the only path that opens/closes anything until a 72-hour clean-diff window proves the two agree (PRD §7's Phase 4 exit criterion). See the Mirror — event detection section below.
 </div>
 
 <h2>The three services, at a glance</h2>
@@ -280,22 +280,65 @@
 </details>
 
 <details class="module-card">
-  <summary><span class="module-path">polyprinter/mirror/fills.py</span><span class="module-summary">— fill simulation (built, tested, not wired up yet)</span></summary>
+  <summary><span class="module-path">polyprinter/mirror/fills.py</span><span class="module-summary">— fill simulation</span></summary>
   <div class="module-body">
     <div class="fn-list">
       <div class="fn-item">
         <div class="fn-name">walk_book<span class="paren">(levels, size_usd, fee_bps=200)</span></div>
-        <div class="fn-desc">Given an order book, spends our size level-by-level (crossing the spread), applies a taker fee, and returns the real average price we'd have paid &mdash; never assumes we got their exact price.</div>
+        <div class="fn-desc">Given an order book, spends our size level-by-level (crossing the spread), applies a taker fee, and returns the real average price we'd have paid &mdash; never assumes we got their exact price. Still not wired to anything: there's no verified-live Polymarket order-book endpoint in this project, so nothing feeds it a real book yet. Built and unit-tested, ready the moment one exists.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">approximate_fill<span class="paren">(price, size_usd, fee_bps=200)</span></div>
+        <div class="fn-desc">What actually runs today, via execute.py below. A deliberately optimistic stand-in for walk_book &mdash; assumes we fill at the trader's own observed price, zero slippage, the same real fee. Understates copy tax rather than overstates it (the safe direction to be wrong in for a viability measurement), and swaps out for walk_book with no other code changes once a real book exists.</div>
       </div>
     </div>
-    <p class="module-note">Deliberately not connected to a live order book yet: there's no verified-live Polymarket order-book endpoint in this project, and it still doesn't matter in practice &mdash; fills only apply to a TAKE, and no mandate has issued a FOLLOW verdict yet (Phase 3 exists now, but real judgment so far has been SKIP every time — see the Mandates section). Built and unit-tested now so it's ready the moment either changes.</p>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/mirror/execute.py</span><span class="module-summary">— turns a TAKE/MIRROR_EXIT verdict into a real position</span></summary>
+  <div class="module-body">
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">open_position<span class="paren">(conn, decision_id, trade, size_usd, mode)</span></div>
+        <div class="fn-desc">decide.py only computes what SHOULD happen; this is what actually opens a <code>positions</code> row. Found missing by code review 2026-08-08, before any FOLLOW mandate had fired &mdash; without it, a real TAKE would have logged a decision with nothing behind it.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">record_exit<span class="paren">(conn, decision_id, position, trade, fraction)</span></div>
+        <div class="fn-desc">One <code>position_exits</code> row per partial exit (FR-13) &mdash; a position goes PARTIAL, not CLOSED, until <code>fraction</code> has taken <code>shares_open</code> all the way to zero.</div>
+      </div>
+    </div>
+  </div>
+</details>
+
+<h2>Mirror &mdash; event detection (Phase 4, in progress)</h2>
+<p>A second, independent way of seeing the same trades &mdash; watching the Polygon blockchain directly instead of polling Polymarket's HTTP API &mdash; run alongside polling, not in place of it, until proven to agree.</p>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/sources/chain.py</span><span class="module-summary">— reads OrderFilled events straight off Polygon</span></summary>
+  <div class="module-body">
+    <p>Every trade on Polymarket settles through the CTF Exchange contract, which emits an <code>OrderFilled</code> event per fill. Verified live 2026-08-08, not inferred: decoded two real transactions (one BUY, one SELL) and matched every field &mdash; trader address, token, side, price, size &mdash; against data-api's own record of the same trade. One finding worth naming: the contract emits <em>two</em> OrderFilled events per match, and in one of them the "taker" field is the exchange contract itself, not a second person &mdash; the trader's own address only ever shows up as "maker", regardless of which side of the match they were on. Get that backwards and you'd misattribute or silently drop trades.</p>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/mirror/watch_events.py</span><span class="module-summary">— detects, but does not decide</span></summary>
+  <div class="module-body">
+    <p>Runs every Mirror cycle alongside polling, watching the same watchlist. Deliberately does <strong>not</strong> call decide()/execute() &mdash; running both paths live would double-book the paper portfolio, since polling's log_index is made up (just "the Nth entry we've seen for this tx") while the chain's is the real on-chain value, so the two would almost never collide on the database's own duplicate-safety check and both would happily act on the same real trade twice. Instead every detected fill is just logged, for comparison.</p>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/mirror/diff_report.py</span><span class="module-summary">— is the chain seeing what polling sees?</span></summary>
+  <div class="module-body">
+    <p>Compares what the chain watcher detected against what polling actually recorded, over the same time window. This is Phase 4's exit criterion made checkable: PRD &sect;7 requires diffs to run clean for 72 hours before polling is ever retired as the thing that actually opens and closes positions. Right now, live: every chain-detected fill has matched a polling-recorded one exactly.</p>
   </div>
 </details>
 
 <details class="module-card">
   <summary><span class="module-path">polyprinter/mirror/run.py</span><span class="module-summary">— the entrypoint</span></summary>
   <div class="module-body">
-    <p>Same shape as Scout's entrypoint on purpose. <code>main()</code> loads <code>mirror:</code> config, then loops <code>watch_poll.run_once</code> every <code>poll_interval_seconds</code> (default 60s), heartbeating before and after every cycle.</p>
+    <p>Same shape as Scout's entrypoint on purpose. <code>main()</code> loads <code>mirror:</code> config, then loops <code>watch_poll.run_once</code> every <code>poll_interval_seconds</code> (default 60s), heartbeating before and after every cycle &mdash; then, if <code>POLYGON_RPC_URL</code> is configured, runs <code>watch_events.run_once</code> as a second step in the same tick. Missing the RPC URL just disables the chain watcher (logged, not fatal) &mdash; same opt-in-by-env-presence pattern Phase 3's mandate issuance already uses.</p>
   </div>
 </details>
 
@@ -358,8 +401,9 @@
 </div>
 
 <h2>What's real vs. what's still a documented gap</h2>
-<div class="gap-note"><strong>Live and real:</strong> trader discovery &amp; scoring (Scout), shrinkage-adjusted ranking, real-time trade detection &amp; decision-writing (Mirror), all of it against live Polymarket data, all of it verified by 45 passing tests plus real end-to-end runs.</div>
+<div class="gap-note"><strong>Live and real:</strong> trader discovery &amp; scoring (Scout), shrinkage-adjusted ranking, real-time trade detection &amp; decision-writing (Mirror), position/exit bookkeeping (execute.py) with an approximate fill model, all of it against live Polymarket data, all of it verified by 94 passing tests plus real end-to-end runs.</div>
 <div class="gap-note"><strong>Live and real, added Phase 3:</strong> LLM mandate issuance against real dossiers, over OpenRouter, with full prompt/response logging (invariant 4) and a hard daily spend cap — real judgment, real reasoning grounded in real numbers, verified against live runs (including two bugs found and fixed the same day: a reasoning-model token budget pitfall, and a crash-the-whole-batch bug in the mandate loop).</div>
-<div class="gap-note"><strong>Waiting on an actual FOLLOW verdict:</strong> every entry decision still resolves to SKIP in practice — not because the mechanism is missing, but because every real mandate issued so far genuinely came back SKIP. Fill simulation and any real paper position both wait on the first FOLLOW. Category/liquidity mandate rules stay unenforced regardless (need a per-market gamma-api lookup that isn't built).</div>
-<div class="gap-note"><strong>Not started:</strong> Phase 4 (on-chain event stream, replacing polling), Phase 5 (Learner, calibration, shadow benchmark), Phase 6 (live trading).</div>
+<div class="gap-note"><strong>Waiting on an actual FOLLOW verdict:</strong> every entry decision still resolves to SKIP in practice — not because the mechanism is missing, but because every real mandate issued so far genuinely came back SKIP. No position has actually opened yet as a result (though the machinery that would is live and tested). A real order-book fill model and category/liquidity mandate rules both stay unbuilt regardless (need endpoints that either aren't verified live or aren't built).</div>
+<div class="gap-note"><strong>In progress, Phase 4:</strong> on-chain event detection (chain.py/watch_events.py) runs live alongside polling, watching the same traders directly on Polygon — but it only logs what it sees, it doesn't drive any decision yet. diff_report.py measures agreement against polling; the exit criterion (PRD &sect;7) is 72 hours clean before polling is ever retired as the thing that actually opens/closes positions.</div>
+<div class="gap-note"><strong>Not started:</strong> Phase 5 (Learner, calibration, shadow benchmark), Phase 6 (live trading).</div>
 {% endblock %}
