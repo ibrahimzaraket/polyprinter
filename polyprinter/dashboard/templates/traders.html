@@ -43,13 +43,7 @@
 <h2>All scouted traders</h2>
 <div class="filter-bar">
   <input id="trader-filter" class="filter-input" type="text" placeholder="Filter by alias or address&hellip;" autocomplete="off">
-  <select id="category-filter" class="filter-select" title="Show only traders graded in this category">
-    <option value="">All categories</option>
-    {% for cat in category_filter_options %}
-    <option value="{{ cat }}">{{ cat }}</option>
-    {% endfor %}
-  </select>
-  <select id="grade-filter" class="filter-select" title="Minimum Copy Score grade — applies to the category selected above, or a trader's best category if 'All categories'">
+  <select id="grade-filter" class="filter-select" title="Minimum Copy Score grade — applies to the category selected below, or a trader's best category if 'All categories'">
     <option value="">Any Copy Score</option>
     <option value="A">A only</option>
     <option value="B">B or better</option>
@@ -59,6 +53,12 @@
   <label class="filter-num-wrap">Min win rate <input id="winrate-filter" class="filter-num" type="number" placeholder="%" step="1" min="0" max="100" inputmode="numeric"></label>
   <label class="filter-toggle" id="tailed-only-wrap"><input id="tailed-only-filter" type="checkbox"> Tailed only</label>
   <label class="filter-toggle" id="fastlane-only-wrap"><input id="fastlane-only-filter" type="checkbox"> Fast-lane only</label>
+</div>
+<div class="filter-bar" id="category-chip-row" role="group" aria-label="Filter by category">
+  <button type="button" class="filter-toggle is-active" data-value="">All categories</button>
+  {% for cat in category_filter_options %}
+  <button type="button" class="filter-toggle" data-value="{{ cat }}">{{ cat }}</button>
+  {% endfor %}
 </div>
 
 <div class="table-wrap">
@@ -71,8 +71,10 @@
     <th class="num sortable" data-key="roi_shrunk">ROI <a class="hint" href="/definitions#shrinkage" title="Shrunk (sample-size adjusted); raw shown smaller below it">?</a><span class="arrow">&#9662;</span></th>
     <th class="num sortable" data-key="win_rate">Win rate<span class="arrow">&#9662;</span></th>
     <th class="num sortable" data-key="capital_deployed">Deployed<span class="arrow">&#9662;</span></th>
+    <th>Trend</th>
     <th class="num sortable" data-key="category_score">Copy Score <a class="hint" href="/definitions#category-copy-score" title="What is the category Copy Score?">?</a><span class="arrow">&#9662;</span></th>
     <th>Strategy</th>
+    <th>Action</th>
   </tr>
   </thead>
   <tbody>
@@ -126,14 +128,31 @@
     </td>
     <td class="num">{{ '$%.0f' % r['capital_deployed_usd'] if r['capital_deployed_usd'] is not none else '—' }}</td>
     <td>
+      {% set trend = trends.get(r['address']) if trends else none %}
+      {% if trend %}
+      <svg class="trend-spark" viewBox="0 0 {{ trend['width'] }} {{ trend['height'] }}" preserveAspectRatio="none" aria-label="ROI (shrunk) trend">
+        <polyline points="{{ trend['points'] }}" fill="none" stroke="{{ 'var(--good)' if trend['up'] else 'var(--critical)' }}" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>
+      {% else %}<span class="placeholder-inline">—</span>{% endif %}
+    </td>
+    <td>
       {% if cat_summary %}
       <span class="badge {{ 'badge-good' if cat_summary['best'].grade == 'A' else 'badge-accent' if cat_summary['best'].grade == 'B' else 'badge-warning' if cat_summary['best'].grade == 'C' else 'badge-critical' }}" title="Best category: {{ cat_summary['best'].category }} ({{ cat_summary['best'].n_resolved }} resolved)">{{ cat_summary['best'].grade }} {{ cat_summary['best'].category }}</span>
       {% else %}<span class="badge badge-neutral" title="No category has enough resolved positions to grade yet">—</span>{% endif %}
     </td>
     <td class="strategy-cell">{% if r['strategy_summary'] %}{{ r['strategy_summary'].split('\n')[0] }}{% else %}<span class="placeholder-inline">not generated yet</span>{% endif %}</td>
+    <td>
+      {% if r['address'] in watchlist %}
+      <span class="badge badge-good" title="Already tailed — manage sizing and fast lane on their own page">&#10003; Tailing</span>
+      {% else %}
+      <form method="post" action="/traders/{{ r['address'] }}/tail">
+        <button type="submit" class="btn btn-primary btn-sm" data-loading-label="Tailing…" title="Pin this trader — set sizing and fast lane on their own page afterward">Tail</button>
+      </form>
+      {% endif %}
+    </td>
   </tr>
   {% else %}
-  <tr><td colspan="8" class="placeholder">No snapshots yet — run the Scout (`python -m polyprinter.scout.run`).</td></tr>
+  <tr><td colspan="10" class="placeholder">No snapshots yet — run the Scout (`python -m polyprinter.scout.run`).</td></tr>
   {% endfor %}
   </tbody>
 </table>
@@ -144,7 +163,9 @@
 <script>
 (function () {
   var input = document.getElementById('trader-filter');
-  var categoryFilter = document.getElementById('category-filter');
+  var categoryChipRow = document.getElementById('category-chip-row');
+  var categoryChips = categoryChipRow ? Array.prototype.slice.call(categoryChipRow.querySelectorAll('.filter-toggle')) : [];
+  var selectedCategory = '';
   var gradeFilter = document.getElementById('grade-filter');
   var roiFilter = document.getElementById('roi-filter');
   var winrateFilter = document.getElementById('winrate-filter');
@@ -183,7 +204,7 @@
   // toggles used, just extended.
   function applyFilters() {
     var q = input ? input.value.trim().toLowerCase() : '';
-    var wantCategory = categoryFilter ? categoryFilter.value : '';
+    var wantCategory = selectedCategory;
     var wantGradeFloor = gradeFilter ? gradeFilter.value : '';
     var minRoi = roiFilter && roiFilter.value !== '' ? parseFloat(roiFilter.value) : null;
     var minWinRate = winrateFilter && winrateFilter.value !== '' ? parseFloat(winrateFilter.value) : null;
@@ -220,8 +241,17 @@
   [input, roiFilter, winrateFilter].forEach(function (el) {
     el && el.addEventListener('input', applyFilters);
   });
-  [categoryFilter, gradeFilter].forEach(function (el) {
-    el && el.addEventListener('change', applyFilters);
+  gradeFilter && gradeFilter.addEventListener('change', applyFilters);
+
+  // Category chips: exactly one active at a time, same single-select
+  // meaning the old <select> had — just a row of buttons instead of a
+  // dropdown (layout, not new behavior).
+  categoryChips.forEach(function (chip) {
+    chip.addEventListener('click', function () {
+      selectedCategory = chip.getAttribute('data-value') || '';
+      categoryChips.forEach(function (c) { c.classList.toggle('is-active', c === chip); });
+      applyFilters();
+    });
   });
   [tailedOnly, fastlaneOnly].forEach(function (box, i) {
     if (!box) return;
@@ -252,6 +282,19 @@
         return (an - bn) * sortState.dir;
       });
       sorted.forEach(function (r) { tbody.appendChild(r); });
+    });
+  });
+
+  // Inline "Tail" buttons in the Action column — same disable-on-submit
+  // feedback trader_detail.html's write forms already use.
+  table.querySelectorAll('form').forEach(function (form) {
+    form.addEventListener('submit', function () {
+      var btn = form.querySelector('button[type="submit"]');
+      if (!btn || btn.disabled) return;
+      var loadingLabel = btn.getAttribute('data-loading-label');
+      if (loadingLabel) btn.textContent = loadingLabel;
+      btn.disabled = true;
+      btn.classList.add('is-loading');
     });
   });
 })();

@@ -614,6 +614,38 @@ def _category_summary(scores: list) -> dict | None:
 # silently gain/lose options as data changes underneath it.
 TRADER_CATEGORY_FILTER_OPTIONS = [label for _, label in category_score.KNOWN_CATEGORY_TAGS] + [category_score.UNCATEGORIZED]
 
+TREND_SPARK_MAX_POINTS = 8  # a compact row-level trend, not the detail page's full history chart
+
+
+def _trader_trends(conn: sqlite3.Connection, *, field: str = "roi_shrunk", width: int = 72, height: int = 24, pad: float = 3.0) -> dict[str, dict]:
+    """Compact per-trader ROI-shrunk trend line for the /traders table's
+    Trend column — same field trader_detail.html's own sparkline already
+    charts, just smaller and read for every trader in one query (grouped
+    in Python) instead of trader_detail's single-trader read repeated 200+
+    times. idx_snap_addr_time already covers this ORDER BY.
+    """
+    rows = conn.execute(
+        f"SELECT address, {field} AS v FROM trader_snapshots WHERE {field} IS NOT NULL ORDER BY address, scanned_at ASC"
+    ).fetchall()
+    by_address: dict[str, list[float]] = {}
+    for r in rows:
+        by_address.setdefault(r["address"], []).append(r["v"])
+
+    trends: dict[str, dict] = {}
+    for address, values in by_address.items():
+        trend = values[-TREND_SPARK_MAX_POINTS:]
+        if len(trend) < 2:
+            continue
+        x_span = (len(trend) - 1) or 1
+        y_min, y_max = min(trend), max(trend)
+        y_span = (y_max - y_min) or 1
+        points = " ".join(
+            f"{pad + i / x_span * (width - 2 * pad):.1f},{height - pad - (v - y_min) / y_span * (height - 2 * pad):.1f}"
+            for i, v in enumerate(trend)
+        )
+        trends[address] = {"points": points, "width": width, "height": height, "up": trend[-1] >= trend[0]}
+    return trends
+
 
 @app.route("/traders")
 def traders() -> str:
@@ -639,6 +671,7 @@ def traders() -> str:
     all_scores = {r["address"]: category_score.trader_category_scores(conn, r["address"]) for r in rows}
     category_summaries = {addr: _category_summary(scores) for addr, scores in all_scores.items()}
     category_grades = {addr: {s.category: s.grade for s in scores if s.grade is not None} for addr, scores in all_scores.items()}
+    trends = _trader_trends(conn)
     return render_template(
         "traders.html",
         rows=rows,
@@ -648,6 +681,7 @@ def traders() -> str:
         category_filter_options=TRADER_CATEGORY_FILTER_OPTIONS,
         fast_lane_addresses=fast_lane_addresses,
         category_summaries=category_summaries,
+        trends=trends,
         active_tab="traders",
     )
 
