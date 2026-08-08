@@ -1,34 +1,86 @@
 {% extends "base.html" %}
 {% block title %} — Now{% endblock %}
 {% block content %}
-<h1>Now</h1>
+<div class="page-lede">
+  <h1>Now</h1>
+</div>
+<p>A snapshot of the whole system: what's been scouted, what's been decided, and whether every service is still alive. See the <a href="/definitions">Definitions</a> tab for anything unfamiliar.</p>
 
-<div class="stat-row">
-  <div class="stat"><div class="label">Traders</div><div class="value">{{ trader_count }}</div></div>
-  <div class="stat"><div class="label">Snapshots</div><div class="value">{{ snapshot_count }}</div></div>
-  <div class="stat"><div class="label">Decisions</div><div class="value">{{ decision_count }}</div></div>
-  <div class="stat"><div class="label">Open positions</div><div class="value">{{ open_position_count }}</div></div>
+<div class="stat-grid">
+  <div class="stat-tile">
+    <div class="label">Copy tax <a class="hint" href="/definitions#copy-tax" title="What is copy tax?">?</a></div>
+    {% if copy_tax_avg_cents is not none %}
+      <div class="value">{{ '%.2f¢' % copy_tax_avg_cents }}</div>
+      <div class="sub">avg. round-trip, {{ copy_tax_n }} resolved trade{{ '' if copy_tax_n == 1 else 's' }}</div>
+    {% else %}
+      <div class="value">—</div>
+      <div class="sub">no resolved copy trades yet</div>
+    {% endif %}
+  </div>
+
+  <div class="stat-tile {{ 'accent-critical' if stale else 'accent-good' }}">
+    <div class="label">Heartbeat</div>
+    {% if stale %}
+      <div class="value" style="font-size: var(--text-xl); color: var(--critical);">{{ stale | length }} stale</div>
+      <div class="sub">of {{ beats | length }} known service{{ '' if beats|length == 1 else 's' }}</div>
+    {% else %}
+      <div class="value" style="font-size: var(--text-xl); color: var(--good);">All beating</div>
+      <div class="sub">{{ beats | length }} service{{ '' if beats|length == 1 else 's' }} on schedule</div>
+    {% endif %}
+  </div>
+
+  <div class="stat-tile">
+    <div class="label">Open positions</div>
+    <div class="value">{{ open_position_count }}</div>
+    <div class="sub">across all followed traders</div>
+  </div>
+
+  <div class="stat-tile">
+    <div class="label">Last event received</div>
+    {% if last_event %}
+      <div class="value" style="font-size: var(--text-lg);">{{ last_event['service'] }}</div>
+      <div class="sub mono">{{ last_event['ts'] }} · {{ last_event['message'] }}</div>
+    {% else %}
+      <div class="value">—</div>
+      <div class="sub">no events logged yet</div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="stat-grid" style="grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); margin-bottom: var(--sp-5);">
+  <div class="stat-tile"><div class="label">Traders</div><div class="value">{{ trader_count }}</div></div>
+  <div class="stat-tile"><div class="label">Snapshots</div><div class="value">{{ snapshot_count }}</div></div>
+  <div class="stat-tile"><div class="label">Decisions</div><div class="value">{{ decision_count }}</div></div>
 </div>
 
 <h2>Heartbeats</h2>
 <p>
   {% if stale %}
-    <span class="stale">{{ stale | length }} service(s) stale (&gt;120s since last beat)</span> —
-    silence here means the service died, not that nothing happened.
+    <span class="badge badge-critical"><span class="glyph">&#9679;</span>{{ stale | length }} service(s) stale (&gt;120s since last beat)</span>
+    — silence here means the service died, not that nothing happened.
   {% else %}
-    <span class="ok">All known services beating on schedule.</span>
+    <span class="badge badge-good"><span class="glyph">&#10003;</span>All known services beating on schedule</span>
   {% endif %}
 </p>
+<div class="table-wrap">
 <table>
-  <tr><th>Service</th><th>Last beat</th><th>Detail</th></tr>
+  <tr><th>Status</th><th>Service</th><th>Last beat</th><th>Detail</th></tr>
   {% for b in beats %}
   <tr>
+    <td>
+      {% if b['service'] in stale_services %}
+        <span class="badge badge-critical"><span class="glyph">&#9679;</span>Stale</span>
+      {% else %}
+        <span class="badge badge-good"><span class="glyph">&#9679;</span>Live</span>
+      {% endif %}
+    </td>
     <td>{{ b['service'] }}</td>
-    <td>{{ b['last_beat'] }}</td>
+    <td class="mono">{{ b['last_beat'] }}</td>
     <td><code>{{ b['detail_json'] }}</code></td>
   </tr>
   {% else %}
-  <tr><td colspan="3" class="placeholder">No service has beaten yet.</td></tr>
+  <tr><td colspan="4" class="placeholder">No service has beaten yet.</td></tr>
   {% endfor %}
 </table>
+</div>
 {% endblock %}

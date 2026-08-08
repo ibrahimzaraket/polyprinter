@@ -12,26 +12,36 @@ DASH=http://127.0.0.1:8765
 FAIL=0
 
 # Never let a driver run destroy a real, populated dashboard database — this
-# actually happened (2026-08-07): a verification run wiped a live 216-trader
-# DB, and the next thing anyone saw was a dashboard reading all zeros.
-# Move the live db out of the way before resetting, restore it on exit no
-# matter how the script ends (success, assertion failure, or a `set -e`
-# abort) via an EXIT trap.
+# actually happened TWICE (2026-08-07, then again 2026-08-08): a verification
+# run wiped a live trader DB, and the next thing anyone saw was a dashboard
+# reading all zeros. The first fix attempt moved the live db aside to
+# data/polyprinter.db.driver-backup — but the "reset db" step further down
+# (`rm -f data/polyprinter.db*`) globs on the same prefix and matched the
+# backup files too, deleting them before the EXIT trap could restore them.
+# Fixed for real this time by parking the backup in its own subdirectory,
+# outside every glob pattern this script uses on data/*.
 DB_FILES=(data/polyprinter.db data/polyprinter.db-wal data/polyprinter.db-shm)
-BACKUP_SUFFIX=".driver-backup"
+BACKUP_DIR="data/.driver-backup"
 
 restore_live_db() {
   rm -f "${DB_FILES[@]}"
-  for f in "${DB_FILES[@]}"; do
-    [ -f "$f$BACKUP_SUFFIX" ] && mv "$f$BACKUP_SUFFIX" "$f"
-  done
+  if [ -d "$BACKUP_DIR" ]; then
+    for f in "${DB_FILES[@]}"; do
+      local_name="$(basename "$f")"
+      [ -f "$BACKUP_DIR/$local_name" ] && mv "$BACKUP_DIR/$local_name" "$f"
+    done
+    rmdir "$BACKUP_DIR" 2>/dev/null || true
+  fi
 }
 trap restore_live_db EXIT
 
 echo "== set aside live db (if present), driver gets a clean slate =="
-for f in "${DB_FILES[@]}"; do
-  [ -f "$f" ] && mv "$f" "$f$BACKUP_SUFFIX"
-done
+if [ -f "${DB_FILES[0]}" ]; then
+  mkdir -p "$BACKUP_DIR"
+  for f in "${DB_FILES[@]}"; do
+    [ -f "$f" ] && mv "$f" "$BACKUP_DIR/$(basename "$f")"
+  done
+fi
 
 check_status() {
   local path="$1" want="$2"

@@ -1,43 +1,165 @@
 {% extends "base.html" %}
 {% block title %} — {{ trader['alias'] or trader['address'] }}{% endblock %}
+
+{% macro metric_row(label, value, hint_id=None, spark=None) %}
+<div class="metric-row">
+  <div class="metric-row-top">
+    <span class="metric-label">{{ label }}{% if hint_id %} <a class="hint" href="/definitions#{{ hint_id }}" title="What is {{ label }}?">?</a>{% endif %}</span>
+    <span class="metric-value">{{ value }}</span>
+  </div>
+  {% if spark %}
+  <svg class="sparkline" viewBox="0 0 {{ spark['width'] }} {{ spark['height'] }}" preserveAspectRatio="none" aria-label="{{ label }} trend over {{ spark['n'] }} snapshots">
+    <polyline points="{{ spark['points'] }}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+    <circle cx="{{ spark['last_x'] }}" cy="{{ spark['last_y'] }}" r="3.5" fill="var(--accent)" stroke="var(--surface)" stroke-width="2" />
+  </svg>
+  <div class="metric-row-sub"><span>{{ spark['first_value'] }}</span><span>{{ spark['n'] }} snapshots</span><span>{{ spark['last_value'] }}</span></div>
+  {% endif %}
+</div>
+{% endmacro %}
+
 {% block content %}
 <p><a href="/traders">&larr; Traders</a></p>
-<h1>{{ trader['alias'] or trader['address'] }}</h1>
-<p><code>{{ trader['address'] }}</code> · first seen {{ trader['first_seen'] }} · discovered via <code>{{ trader['discovery_source'] }}</code> · {{ 'active' if trader['active'] else 'inactive' }}</p>
+<div class="page-lede">
+  <h1>{{ trader['alias'] or trader['address'] }}</h1>
+  {% if trader['active'] %}<span class="badge badge-good"><span class="glyph">&#10003;</span>Active</span>{% else %}<span class="badge badge-neutral">Inactive</span>{% endif %}
+</div>
+<p><code>{{ trader['address'] }}</code> &middot; first seen {{ trader['first_seen'] }} &middot; discovered via <code>{{ trader['discovery_source'] }}</code></p>
 
 <h2>Active mandate</h2>
 {% if active_mandate %}
-<p><strong>{{ active_mandate['verdict'] }}</strong> ({{ active_mandate['confidence'] }} confidence) — issued {{ active_mandate['issued_at'] }}, expires {{ active_mandate['expires_at'] }}</p>
-<p>{{ active_mandate['reasoning'] }}</p>
+<div class="card">
+  <p style="margin-bottom: var(--sp-2);">
+    <span class="badge {{ 'badge-good' if active_mandate['verdict'] == 'FOLLOW' else 'badge-critical' if active_mandate['verdict'] == 'SKIP' else 'badge-warning' }}">{{ active_mandate['verdict'] }}</span>
+    <span class="badge badge-neutral">{{ active_mandate['confidence'] }} confidence</span>
+    <span style="color: var(--text-muted); font-size: var(--text-sm);">issued {{ active_mandate['issued_at'] }} &middot; expires {{ active_mandate['expires_at'] }}</span>
+  </p>
+  <p style="color: var(--text);">{{ active_mandate['reasoning'] }}</p>
+</div>
 {% else %}
-<p class="placeholder">No mandate yet — Mandates ship in Phase 3.</p>
+<div class="empty-state">
+  <div class="glyph">&#128203;</div>
+  <div class="headline">No mandate yet</div>
+  <p>Mandates ship in Phase 3 — an LLM will read this dossier and issue a FOLLOW/WATCH/SKIP verdict with reasoning.</p>
+</div>
 {% endif %}
 
-<h2>Metric history ({{ snapshots | length }} snapshot(s))</h2>
+{% if latest %}
+<h2>Dossier ({{ latest['scanned_at'] }})</h2>
+<div class="dossier-grid">
+
+  <div class="card">
+    <div class="section-label">Performance</div>
+    {{ metric_row('ROI (shrunk)', '%.1f%%' % (latest['roi_shrunk'] * 100) if latest['roi_shrunk'] is not none else '—', 'shrinkage', sparklines.get('roi_shrunk')) }}
+    {{ metric_row('ROI (raw)', '%.1f%%' % (latest['roi_raw'] * 100) if latest['roi_raw'] is not none else '—', 'roi') }}
+    {{ metric_row('Win rate', '%.0f%%' % (latest['win_rate'] * 100) if latest['win_rate'] is not none else '—', 'win-rate', sparklines.get('win_rate')) }}
+    {{ metric_row('Avg win', '$%.0f' % latest['avg_win_usd'] if latest['avg_win_usd'] is not none else '—', 'avg-win-loss') }}
+    {{ metric_row('Avg loss', '$%.0f' % latest['avg_loss_usd'] if latest['avg_loss_usd'] is not none else '—', 'avg-win-loss') }}
+    {{ metric_row('Win/loss ratio', '%.2f' % latest['win_loss_ratio'] if latest['win_loss_ratio'] is not none else '—', 'avg-win-loss') }}
+    {{ metric_row('Resolved positions', latest['resolved_positions'] if latest['resolved_positions'] is not none else '—') }}
+    {{ metric_row('Capital deployed', '$%.0f' % latest['capital_deployed_usd'] if latest['capital_deployed_usd'] is not none else '—') }}
+
+    <div class="metric-row">
+      <div class="metric-row-top"><span class="metric-label">Profit concentration <a class="hint" href="/definitions#profit-concentration" title="What is profit concentration?">?</a></span></div>
+      {% if latest['concentration_top1'] is not none %}
+      <div class="meter-line"><span class="meter-tag">Top 1</span><div class="meter"><div class="meter-fill" style="width:{{ (latest['concentration_top1'] * 100) | round(1) }}%;"></div></div><span class="meter-value">{{ '%.0f%%' % (latest['concentration_top1'] * 100) }}</span></div>
+      {% endif %}
+      {% if latest['concentration_top5'] is not none %}
+      <div class="meter-line"><span class="meter-tag">Top 5</span><div class="meter"><div class="meter-fill" style="width:{{ (latest['concentration_top5'] * 100) | round(1) }}%;"></div></div><span class="meter-value">{{ '%.0f%%' % (latest['concentration_top5'] * 100) }}</span></div>
+      {% endif %}
+      {% if latest['concentration_top1'] is none and latest['concentration_top5'] is none %}<span class="metric-value">—</span>{% endif %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-label">Copyability</div>
+    {{ metric_row('Hold-to-resolution rate', '%.0f%%' % (latest['hold_to_resolution_rate'] * 100) if latest['hold_to_resolution_rate'] is not none else '—', 'hold-to-resolution', sparklines.get('hold_to_resolution_rate')) }}
+    {{ metric_row('Median hold', '%.1f h' % latest['median_hold_hours'] if latest['median_hold_hours'] is not none else '—', 'holding-period') }}
+    {{ metric_row('p90 hold', '%.1f h' % latest['p90_hold_hours'] if latest['p90_hold_hours'] is not none else '—', 'holding-period') }}
+
+    <div class="metric-row">
+      <div class="metric-row-top"><span class="metric-label">Entry price (p10 / median / p90) <a class="hint" href="/definitions#entry-price-deciles" title="What is entry price distribution?">?</a></span></div>
+      {% if latest['entry_price_p10'] is not none %}
+      <div class="price-scale">
+        <div class="price-scale-track">
+          <div class="price-scale-tick" style="left:{{ (latest['entry_price_p10'] * 100) | round(1) }}%;" title="p10: {{ '%.0f¢' % (latest['entry_price_p10']*100) }}"></div>
+          <div class="price-scale-tick strong" style="left:{{ (latest['entry_price_median'] * 100) | round(1) }}%;" title="median: {{ '%.0f¢' % (latest['entry_price_median']*100) }}"></div>
+          <div class="price-scale-tick" style="left:{{ (latest['entry_price_p90'] * 100) | round(1) }}%;" title="p90: {{ '%.0f¢' % (latest['entry_price_p90']*100) }}"></div>
+        </div>
+        <div class="metric-row-sub"><span>{{ '%.0f¢' % (latest['entry_price_p10']*100) }}</span><span>{{ '%.0f¢' % (latest['entry_price_median']*100) }}</span><span>{{ '%.0f¢' % (latest['entry_price_p90']*100) }}</span></div>
+      </div>
+      {% if latest['entry_price_p10'] < 0.10 %}
+      <span class="badge badge-warning" style="margin-top:6px;"><span class="glyph">&#9888;</span>Longshot entries — hard to copy at small bankroll</span>
+      {% endif %}
+      {% else %}
+      <span class="metric-value">—</span>
+      {% endif %}
+    </div>
+
+    {{ metric_row('Sizing pattern (CV)', '%.2f' % latest['sizing_cv'] if latest['sizing_cv'] is not none else '—', 'sizing-pattern', sparklines.get('sizing_cv')) }}
+    {{ metric_row('Scale-in/out frequency', '%.0f%%' % (latest['scale_frequency'] * 100) if latest['scale_frequency'] is not none else '—') }}
+    {{ metric_row('Median market liquidity', '$%.0f' % latest['median_market_liquidity'] if latest['median_market_liquidity'] is not none else '—') }}
+
+    {% if category_mix %}
+    <div class="metric-row">
+      <div class="metric-row-top"><span class="metric-label">Category mix</span></div>
+      <div class="chip-row">
+        {% for cat, stats in category_mix.items() %}
+        <span class="badge badge-neutral">{{ cat }} &middot; {{ stats.get('n', '—') }} trades{% if stats.get('roi') is not none %} &middot; {{ '%.0f%%' % (stats['roi'] * 100) }} ROI{% endif %}</span>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="section-label">Liveness</div>
+    {{ metric_row('Trades (7d)', latest['trades_7d'] if latest['trades_7d'] is not none else 0) }}
+    {{ metric_row('Trades (30d)', latest['trades_30d'] if latest['trades_30d'] is not none else 0) }}
+    {{ metric_row('Open positions', latest['open_positions'] if latest['open_positions'] is not none else 0) }}
+    <div class="metric-row">
+      <div class="metric-row-top">
+        <span class="metric-label">Status <a class="hint" href="/definitions#liveness" title="What is liveness?">?</a></span>
+        {% if trader['active'] %}<span class="badge badge-good"><span class="glyph">&#9679;</span>Active</span>{% else %}<span class="badge badge-neutral"><span class="glyph">&#9679;</span>Inactive</span>{% endif %}
+      </div>
+    </div>
+  </div>
+
+</div>
+{% else %}
+<div class="empty-state">
+  <div class="glyph">&#128202;</div>
+  <div class="headline">No dossier yet</div>
+  <p>This trader has no snapshots yet — run the Scout to compute one.</p>
+</div>
+{% endif %}
+
+<h2>Metric history ({{ snapshots | length }} snapshot{{ '' if snapshots|length == 1 else 's' }})</h2>
+<div class="table-wrap">
 <table>
   <tr>
-    <th>Scanned</th><th>ROI shrunk</th><th>ROI raw</th><th>Resolved</th><th>Win rate</th>
-    <th>W/L ratio</th><th>Hold-to-res.</th><th>Median hold (h)</th><th>Concentration top1</th>
-    <th>Sizing CV</th><th>Trades 7d</th><th>Trades 30d</th><th>Open pos.</th>
+    <th>Scanned</th><th class="num">ROI shrunk</th><th class="num">ROI raw</th><th class="num">Resolved</th><th class="num">Win rate</th>
+    <th class="num">W/L ratio</th><th class="num">Hold-to-res.</th><th class="num">Median hold (h)</th><th class="num">Concentration top1</th>
+    <th class="num">Sizing CV</th><th class="num">Trades 7d</th><th class="num">Trades 30d</th><th class="num">Open pos.</th>
   </tr>
   {% for s in snapshots %}
   <tr>
-    <td>{{ s['scanned_at'] }}</td>
-    <td>{{ '%.1f%%' % (s['roi_shrunk'] * 100) if s['roi_shrunk'] is not none else '—' }}</td>
-    <td>{{ '%.1f%%' % (s['roi_raw'] * 100) if s['roi_raw'] is not none else '—' }}</td>
-    <td>{{ s['resolved_positions'] }}</td>
-    <td>{{ '%.0f%%' % (s['win_rate'] * 100) if s['win_rate'] is not none else '—' }}</td>
-    <td>{{ '%.2f' % s['win_loss_ratio'] if s['win_loss_ratio'] is not none else '—' }}</td>
-    <td>{{ '%.0f%%' % (s['hold_to_resolution_rate'] * 100) if s['hold_to_resolution_rate'] is not none else '—' }}</td>
-    <td>{{ '%.1f' % s['median_hold_hours'] if s['median_hold_hours'] is not none else '—' }}</td>
-    <td>{{ '%.0f%%' % (s['concentration_top1'] * 100) if s['concentration_top1'] is not none else '—' }}</td>
-    <td>{{ '%.2f' % s['sizing_cv'] if s['sizing_cv'] is not none else '—' }}</td>
-    <td>{{ s['trades_7d'] }}</td>
-    <td>{{ s['trades_30d'] }}</td>
-    <td>{{ s['open_positions'] }}</td>
+    <td class="mono">{{ s['scanned_at'] }}</td>
+    <td class="num">{{ '%.1f%%' % (s['roi_shrunk'] * 100) if s['roi_shrunk'] is not none else '—' }}</td>
+    <td class="num">{{ '%.1f%%' % (s['roi_raw'] * 100) if s['roi_raw'] is not none else '—' }}</td>
+    <td class="num">{{ s['resolved_positions'] }}</td>
+    <td class="num">{{ '%.0f%%' % (s['win_rate'] * 100) if s['win_rate'] is not none else '—' }}</td>
+    <td class="num">{{ '%.2f' % s['win_loss_ratio'] if s['win_loss_ratio'] is not none else '—' }}</td>
+    <td class="num">{{ '%.0f%%' % (s['hold_to_resolution_rate'] * 100) if s['hold_to_resolution_rate'] is not none else '—' }}</td>
+    <td class="num">{{ '%.1f' % s['median_hold_hours'] if s['median_hold_hours'] is not none else '—' }}</td>
+    <td class="num">{{ '%.0f%%' % (s['concentration_top1'] * 100) if s['concentration_top1'] is not none else '—' }}</td>
+    <td class="num">{{ '%.2f' % s['sizing_cv'] if s['sizing_cv'] is not none else '—' }}</td>
+    <td class="num">{{ s['trades_7d'] }}</td>
+    <td class="num">{{ s['trades_30d'] }}</td>
+    <td class="num">{{ s['open_positions'] }}</td>
   </tr>
   {% else %}
   <tr><td colspan="13" class="placeholder">No snapshots yet.</td></tr>
   {% endfor %}
 </table>
+</div>
 {% endblock %}

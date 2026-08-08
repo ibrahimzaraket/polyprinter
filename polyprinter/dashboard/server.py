@@ -42,6 +42,62 @@ def close_db(_exc: BaseException | None) -> None:
         db.close()
 
 
+# Metrics worth trending as an inline sparkline on the trader detail page,
+# alongside a display label and a formatter for the value shown at the
+# right-hand end of the chart. Presentation only — no new computation, just
+# reshaping trader_snapshots rows that already exist for the chart.
+SPARKLINE_METRICS = [
+    ("roi_shrunk", "ROI (shrunk)", "pct"),
+    ("win_rate", "Win rate", "pct"),
+    ("hold_to_resolution_rate", "Hold-to-resolution", "pct"),
+    ("sizing_cv", "Sizing CV", "num"),
+]
+
+
+def _format_metric(value: float, kind: str) -> str:
+    if kind == "pct":
+        return f"{value * 100:.1f}%"
+    return f"{value:.2f}"
+
+
+def _sparkline(snapshots_chronological: list[sqlite3.Row], field: str, kind: str, *, width: int = 176, height: int = 40, pad: float = 5.0) -> dict | None:
+    """Build inline-SVG polyline points for one metric across snapshots,
+    oldest first. Returns None when there are fewer than 2 non-null
+    readings — a single point has no trend to draw (dataviz: not every
+    figure is a chart; a lone value is a stat, not a line).
+    """
+    points_raw = [(i, row[field]) for i, row in enumerate(snapshots_chronological) if row[field] is not None]
+    if len(points_raw) < 2:
+        return None
+    xs = [p[0] for p in points_raw]
+    ys = [p[1] for p in points_raw]
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
+    x_span = (x_max - x_min) or 1
+    y_span = (y_max - y_min) or 1
+
+    def sx(x: float) -> float:
+        return pad + (x - x_min) / x_span * (width - 2 * pad)
+
+    def sy(y: float) -> float:
+        # invert: higher value -> higher on screen (smaller svg y)
+        return height - pad - (y - y_min) / y_span * (height - 2 * pad)
+
+    coords = [(sx(x), sy(y)) for x, y in points_raw]
+    points_str = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    last_x, last_y = coords[-1]
+    return {
+        "points": points_str,
+        "width": width,
+        "height": height,
+        "last_x": last_x,
+        "last_y": last_y,
+        "first_value": _format_metric(ys[0], kind),
+        "last_value": _format_metric(ys[-1], kind),
+        "n": len(points_raw),
+    }
+
+
 def _latest_snapshot_per_trader(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
@@ -71,14 +127,34 @@ def now() -> str:
         "SELECT COUNT(*) AS n FROM positions WHERE status != 'CLOSED'"
     ).fetchone()["n"]
 
+    # Copy tax headline (FR-28) — average round-trip copy tax across
+    # resolved outcomes so far. None/0 rows until Mirror + Learner (Phase
+    # 2+) start populating `outcomes`; the template renders that as "no
+    # trades resolved yet", not a fake zero.
+    copy_tax_row = conn.execute(
+        "SELECT AVG(copy_tax_total_cents) AS avg_cents, COUNT(*) AS n "
+        "FROM outcomes WHERE copy_tax_total_cents IS NOT NULL"
+    ).fetchone()
+
+    # Last event received (FR-28) — most recent row of the structured
+    # event log, distinct from a heartbeat (a heartbeat says a service is
+    # alive; an event says something actually happened).
+    last_event = conn.execute("SELECT * FROM events ORDER BY ts DESC LIMIT 1").fetchone()
+
+    stale_services = {s["service"] for s in stale}
+
     return render_template(
         "now.html",
         beats=beats,
         stale=stale,
+        stale_services=stale_services,
         trader_count=trader_count,
         snapshot_count=snapshot_count,
         decision_count=decision_count,
         open_position_count=open_position_count,
+        copy_tax_avg_cents=copy_tax_row["avg_cents"],
+        copy_tax_n=copy_tax_row["n"],
+        last_event=last_event,
         active_tab="now",
     )
 
@@ -109,10 +185,29 @@ def trader_detail(address: str) -> str:
         """,
         (address,),
     ).fetchone()
+
+    latest = snapshots[0] if snapshots else None
+    category_mix = {}
+    if latest is not None and latest["category_mix_json"]:
+        try:
+            category_mix = json.loads(latest["category_mix_json"])
+        except (TypeError, ValueError):
+            category_mix = {}
+
+    chronological = list(reversed(snapshots))  # oldest -> newest, for charting
+    sparklines = {}
+    for field, label, kind in SPARKLINE_METRICS:
+        spark = _sparkline(chronological, field, kind)
+        if spark is not None:
+            sparklines[field] = {**spark, "label": label}
+
     return render_template(
         "trader_detail.html",
         trader=trader,
         snapshots=snapshots,
+        latest=latest,
+        category_mix=category_mix,
+        sparklines=sparklines,
         active_mandate=active_mandate,
         active_tab="traders",
     )
@@ -142,6 +237,11 @@ def calibration() -> str:
 @app.route("/us-vs-them")
 def us_vs_them() -> str:
     return render_template("us_vs_them.html", active_tab="us_vs_them")
+
+
+@app.route("/definitions")
+def definitions() -> str:
+    return render_template("definitions.html", active_tab="definitions")
 
 
 def main() -> None:

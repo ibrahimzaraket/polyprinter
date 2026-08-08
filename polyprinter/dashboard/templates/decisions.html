@@ -2,26 +2,45 @@
 {% block title %} — Decisions{% endblock %}
 {% block content %}
 <h1>Decisions</h1>
-<p>Every observed trade lands here, TAKE or SKIP, with a reason — 100% coverage is a hard invariant (docs/SCHEMA.md invariant 1). Empty below is expected until Mirror (Phase 2) starts observing trades.</p>
+<p>Every observed trade lands here, <a class="hint" href="/definitions#decision" title="What is a decision?">?</a> TAKE or SKIP, with a reason — 100% coverage is a hard invariant (docs/SCHEMA.md invariant 1). Empty below is expected until Mirror (Phase 2) starts observing trades.</p>
+
+{% if rows %}
+<div class="table-wrap">
 <table>
   <tr>
-    <th>Decided</th><th>Trader</th><th>Verdict</th><th>Reason</th><th>Size</th>
-    <th>Mode</th><th>Side</th><th>Their price</th><th>Latency</th>
+    <th>Decided</th><th>Trader</th><th>Verdict</th><th>Reason</th><th class="num">Size</th>
+    <th>Mode</th><th>Side</th><th class="num">Their price</th><th class="num">Latency</th>
   </tr>
   {% for r in rows %}
   <tr>
-    <td>{{ r['decided_at'] }}</td>
+    <td class="mono">{{ r['decided_at'] }}</td>
     <td><a href="/traders/{{ r['address'] }}">{{ r['address'][:10] }}…</a></td>
-    <td>{{ r['verdict'] }}</td>
-    <td>{{ r['skip_reason_code'] or '' }} {{ r['skip_reason_text'] or '' }}</td>
-    <td>{{ '$%.2f' % r['size_usd'] if r['size_usd'] is not none else '—' }}</td>
-    <td>{{ r['mode'] }}</td>
+    <td>
+      {% if r['verdict'] == 'TAKE' %}
+        <span class="badge badge-good"><span class="glyph">&#10003;</span>TAKE</span>
+      {% elif r['verdict'] == 'SKIP' %}
+        <span class="badge badge-neutral"><span class="glyph">&#8722;</span>SKIP</span>
+      {% else %}
+        <span class="badge badge-accent"><span class="glyph">&#8646;</span>{{ r['verdict'] }}</span>
+      {% endif %}
+    </td>
+    <td style="white-space: normal; min-width: 220px;">
+      {% if r['skip_reason_code'] %}<code>{{ r['skip_reason_code'] }}</code> {% endif %}{{ r['skip_reason_text'] or '' }}
+    </td>
+    <td class="num">{{ '$%.2f' % r['size_usd'] if r['size_usd'] is not none else '—' }}</td>
+    <td><span class="badge badge-neutral">{{ r['mode'] }}</span></td>
     <td>{{ r['side'] }}</td>
-    <td>{{ r['their_price'] }}</td>
-    <td>{{ r['latency_ms'] }} ms</td>
+    <td class="num">{{ r['their_price'] }}</td>
+    <td class="num">{{ r['latency_ms'] }} ms</td>
   </tr>
-  {% else %}
-  <tr><td colspan="9" class="placeholder">No decisions yet.</td></tr>
   {% endfor %}
 </table>
+</div>
+{% else %}
+<div class="empty-state">
+  <div class="glyph">&#128203;</div>
+  <div class="headline">No decisions yet</div>
+  <p>Every observed trade will land here as TAKE or SKIP, with a reason, once Mirror (Phase 2) starts watching followed traders. Nothing is broken — this is the expected state before Phase 2 ships.</p>
+</div>
+{% endif %}
 {% endblock %}

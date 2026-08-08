@@ -139,15 +139,23 @@ a live run.
   mid-run. 408 was added after a live full-scale run (2026-08-07) lost one
   candidate to a bare timeout that would've succeeded on retry.
 
-- **`driver.sh` used to wipe the live dashboard's database, silently.**
+- **`driver.sh` used to wipe the live dashboard's database, silently — twice.**
   It resets to a clean db on every run (`rm -f data/polyprinter.db*`) so
   its own assertions are deterministic — but that file is the *same* db
   the `dashboard`/`scout` services read in normal use. Running the driver
   after a real Scout pass looked, from the dashboard, exactly like data
-  loss: every count back to zero. Fixed by having the driver move the live
-  db aside before it resets anything and restore it via an `EXIT` trap
-  (covers success, a failed assertion, and a `set -e` abort alike) — the
-  driver now always hands back whatever was there before it ran.
+  loss: every count back to zero. First fix (2026-08-07): move the live db
+  aside to `data/polyprinter.db.driver-backup` before resetting, restore it
+  via an `EXIT` trap. That fix had its own bug (caught 2026-08-08 during a
+  driver run, which wiped a real 212-trader db a second time): the backup
+  filenames still started with `polyprinter.db`, so the *same* `rm -f
+  data/polyprinter.db*` reset line matched and deleted the backups too,
+  before the trap ever got a chance to restore them — a glob doesn't know
+  a name it matches is "the backup," it just matches the string. Fixed for
+  real by parking the backup in its own subdirectory
+  (`data/.driver-backup/`), which no glob this script uses on `data/*`
+  reaches. Lesson: when protecting a file from a wildcard delete, moving
+  it to a name the *same* wildcard still matches isn't protection.
 
 - **`docker compose run` vs `docker compose exec`, and the agent
   sandbox's filesystem is NOT the Docker daemon's filesystem.** In this

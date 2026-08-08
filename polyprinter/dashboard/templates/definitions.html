@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block title %} — Definitions{% endblock %}
+{% block content %}
+<h1>Definitions</h1>
+<p>Plain-language explanations for the jargon used elsewhere on this site. No trading background assumed. Jump here anytime by clicking a <span class="hint" style="cursor:default;">?</span> next to a column header or field label.</p>
+
+<div class="section-label" style="margin-top: var(--sp-6);">Performance — did they actually make money?</div>
+<div class="card glossary-card">
+
+  <div class="term-item" id="roi">
+    <div class="term-name">ROI (return on investment / return on capital deployed)</div>
+    <div class="term-def">How much profit a trader made, as a percentage of the money they put in. A trader who turned $1,000 into $1,220 of profit-and-capital has a 22% ROI.</div>
+  </div>
+
+  <div class="term-item" id="shrinkage">
+    <div class="term-name">Shrinkage / shrunk ROI</div>
+    <div class="term-def">A correction that pulls a trader's ROI toward the average, more strongly when they've made few trades. A trader who is 300% up after only 6 trades has probably just been lucky — 6 trades isn't enough evidence to trust the number as-is. A trader who is 22% up after 400 trades has proven it over and over. Without this correction, the leaderboard would be dominated by lucky beginners instead of consistently good traders. The formula treats every trader as if they'd also played roughly 30 "average" trades in addition to their real ones, so a small sample gets pulled hard toward the middle and a large sample barely moves.</div>
+    <div class="term-why">Why it matters: this is the whole reason the ranked Traders list isn't just "biggest number wins" — it's what stops a 6-trade lucky streak from outranking a proven track record.</div>
+  </div>
+
+  <div class="term-item" id="win-rate">
+    <div class="term-name">Win rate</div>
+    <div class="term-def">Of the trades that have finished (resolved), what percentage were profitable. 80% win rate means 8 out of every 10 resolved trades made money.</div>
+  </div>
+
+  <div class="term-item" id="avg-win-loss">
+    <div class="term-name">Average win / average loss / win-loss ratio</div>
+    <div class="term-def">Average win is the typical dollar profit on a winning trade; average loss is the typical dollar loss on a losing trade. Win/loss ratio divides one by the other — a ratio of 2.0 means their typical win is twice the size of their typical loss. A trader can have a low win rate and still be profitable if their wins are much bigger than their losses (or vice versa), which is why these numbers are shown together, not alone.</div>
+  </div>
+
+  <div class="term-item" id="profit-concentration">
+    <div class="term-name">Profit concentration (top-1 / top-5)</div>
+    <div class="term-def">What share of a trader's total profit came from just their single best trade ("top 1"), or from their five best trades ("top 5"). If top-1 is 90%, almost all of their reported profit rides on one lucky market — the rest of their track record barely matters.</div>
+    <div class="term-why">Why it matters: a trader with low concentration made their money consistently, across many trades. A trader with high concentration made it once and got carried by that one result — much riskier to copy going forward.</div>
+  </div>
+</div>
+
+<div class="section-label" style="margin-top: var(--sp-6);">Copyability — can we actually follow this trader in practice?</div>
+<div class="card glossary-card">
+
+  <div class="term-item" id="hold-to-resolution">
+    <div class="term-name">Hold-to-resolution rate</div>
+    <div class="term-def">Of the positions a trader closed, what share did they hold all the way until the market resolved (rather than selling early for a quick exit).</div>
+    <div class="term-why">Why it matters: this is called the single most predictive field in the whole dossier. If a trader's edge comes from exiting at exactly the right moment, we can't copy that — by the time we see their trade and react, that moment has passed. A trader who mostly holds to resolution is one whose edge survives our lag; a trader who mostly trades out early has an edge we structurally can't copy.</div>
+  </div>
+
+  <div class="term-item" id="holding-period">
+    <div class="term-name">Median / p90 holding period</div>
+    <div class="term-def">How long a trader typically keeps a position open, in hours, before closing it. "Median" is the middle value (half their trades are shorter, half longer). "p90" is the 90th percentile — the length of their longer holds, excluding only their most extreme 10%.</div>
+  </div>
+
+  <div class="term-item" id="entry-price-deciles">
+    <div class="term-name">Entry price distribution / deciles</div>
+    <div class="term-def">Prediction-market prices range from 1¢ to 99¢ and roughly represent the probability the market assigns to an outcome. This shows the spread of prices a trader typically buys at: their p10 (a low-end price — 10% of their trades enter cheaper than this), their median (the middle), and their p90 (a high-end price).</div>
+    <div class="term-why">Why it matters: a trader who mostly buys sub-10¢ longshots is chasing big payouts on unlikely outcomes. That style is effectively uncopyable at a small bankroll — the position sizes needed to make it worthwhile, and the number of losing bets you sit through along the way, don't fit a $100 account, regardless of whether the trader's overall math works out for them.</div>
+  </div>
+
+  <div class="term-item" id="sizing-pattern">
+    <div class="term-name">Sizing pattern (coefficient of variation)</div>
+    <div class="term-def">Whether a trader bets roughly the same dollar amount every time ("flat" sizing) or varies their bet size a lot depending on how confident they are ("conviction" sizing). Measured as the coefficient of variation (CV) of their position sizes — a low number means flat, a high number means conviction-sized. </div>
+    <div class="term-why">Why it matters: conviction sizing is a signal worth copying (they're telling you which trades they believe in most); flat sizing means bet size carries no extra information.</div>
+  </div>
+</div>
+
+<div class="section-label" style="margin-top: var(--sp-6);">Liveness — is this trader (and this system) still working?</div>
+<div class="card glossary-card">
+
+  <div class="term-item" id="liveness">
+    <div class="term-name">Liveness</div>
+    <div class="term-def">Whether a trader is still actively trading — based on recent trade counts and whether they currently hold any open positions. A trader can have a great historical dossier and still be inactive (stopped trading).</div>
+  </div>
+
+  <div class="term-item" id="proxy-wallet">
+    <div class="term-name">Proxy wallet</div>
+    <div class="term-def">On Polymarket, the wallet address that shows up on the public leaderboard and in trade history isn't always a person's main crypto wallet — it's usually a "proxy" wallet the Polymarket app creates and controls on their behalf. All the trader addresses tracked in this dashboard are these proxy wallets, which is normal and expected, not a red flag.</div>
+  </div>
+
+  <div class="term-item" id="heartbeat">
+    <div class="term-name">Heartbeat / stale heartbeat</div>
+    <div class="term-def">Each background service (Scout, Mirror, the dashboard itself) periodically "checks in" with a timestamp so the system can tell it's still alive. A heartbeat is "stale" if a service hasn't checked in for more than 2 minutes — that usually means the service has crashed or hung, not that there's simply nothing to do right now.</div>
+    <div class="term-why">Why it matters: without this distinction, a dead service and a quiet market look identical — both show "nothing happening." A stale heartbeat is the difference between "all is well, we're just waiting" and "something broke."</div>
+  </div>
+</div>
+
+<div class="section-label" style="margin-top: var(--sp-6);">System — how this dashboard itself works</div>
+<div class="card glossary-card">
+
+  <div class="term-item" id="paper-vs-live">
+    <div class="term-name">Paper mode vs. live mode</div>
+    <div class="term-def">Paper mode simulates trades with fake money to test the strategy without financial risk. Live mode would place real trades with real capital. The badge in the top-left of every page shows which mode the system is currently running in — this dashboard is currently in <strong>PAPER</strong> mode, meaning no real money is at risk.</div>
+  </div>
+
+  <div class="term-item" id="decision">
+    <div class="term-name">Decision, TAKE vs. SKIP</div>
+    <div class="term-def">Every trade a followed trader makes produces exactly one "decision" row: <strong>TAKE</strong> means the system copied it (in paper or live mode); <strong>SKIP</strong> means it deliberately chose not to, along with a specific reason (for example: the trader has no active mandate, the market's liquidity was too low, or the portfolio was already at its exposure cap). Every observed trade gets a decision — skipping is a normal, logged outcome, not an error.</div>
+  </div>
+
+  <div class="term-item" id="copy-tax">
+    <div class="term-name">Copy tax</div>
+    <div class="term-def">The cost of being a follower instead of the original trader — the gap between the price they got and the price we got, because we're always reacting a little after them. Measured in cents of price (not percent), because on a prediction market the price already behaves like a probability out of $1, so a flat cents number is the honest way to measure the gap.</div>
+    <div class="term-why">Why it matters: this is the core viability number for the whole project. If copy tax regularly eats more than the edge the trader actually had, copying them mechanically loses money even when they themselves are profitable.</div>
+  </div>
+
+  <div class="term-item" id="neg-risk-market">
+    <div class="term-name">Neg-risk market</div>
+    <div class="term-def">A "negative risk" market is a Polymarket structure used for questions with several mutually exclusive outcomes (e.g. "who wins the election" with many candidates), where the underlying token mechanics are more complex than a simple two-sided Yes/No market. They're called out separately because that complexity makes trades on them easier to misread as something they're not.</div>
+  </div>
+</div>
+
+{% endblock %}

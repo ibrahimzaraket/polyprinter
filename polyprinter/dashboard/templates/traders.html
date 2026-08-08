@@ -1,36 +1,103 @@
 {% extends "base.html" %}
 {% block title %} — Traders{% endblock %}
 {% block content %}
-<h1>Traders</h1>
-<p>Ranked by shrunk ROI (sample-size adjusted, k≈30 — see docs/PRD.md §6.2). Raw ROI is shown alongside so you can see how much shrinkage moved a given trader.</p>
-<table>
+<div class="page-lede">
+  <h1>Traders</h1>
+</div>
+<p>Ranked by shrunk ROI (sample-size adjusted, k&asymp;30 — see <a class="hint" href="/definitions#shrinkage" title="What is shrinkage?">?</a>). Raw ROI is shown alongside so you can see how much shrinkage moved a given trader.</p>
+
+<input id="trader-filter" type="text" placeholder="Filter by alias or address&hellip;" autocomplete="off"
+  style="width:100%; max-width:340px; padding:8px 12px; margin-bottom:12px; font-size:var(--text-base);
+         background:var(--surface); color:var(--text); border:1px solid var(--border);
+         border-radius:var(--radius-md); font-family:var(--font);">
+
+<div class="table-wrap">
+<table id="traders-table">
+  <thead>
   <tr>
     <th>#</th>
     <th>Trader</th>
-    <th>ROI (shrunk)</th>
-    <th>ROI (raw)</th>
-    <th>Resolved pos.</th>
-    <th>Win rate</th>
-    <th>Hold-to-resolution</th>
-    <th>Trades 30d</th>
+    <th class="num sortable" data-key="roi_shrunk">ROI (shrunk) <a class="hint" href="/definitions#shrinkage" title="What is shrinkage?">?</a><span class="arrow">&#9662;</span></th>
+    <th class="num sortable" data-key="roi_raw">ROI (raw)<span class="arrow">&#9662;</span></th>
+    <th class="num sortable" data-key="resolved_positions">Resolved pos.<span class="arrow">&#9662;</span></th>
+    <th class="num sortable" data-key="win_rate">Win rate<span class="arrow">&#9662;</span></th>
+    <th class="num sortable" data-key="hold_to_resolution_rate">Hold-to-resolution <a class="hint" href="/definitions#hold-to-resolution" title="Why this matters">?</a><span class="arrow">&#9662;</span></th>
+    <th class="num sortable" data-key="trades_30d">Trades 30d<span class="arrow">&#9662;</span></th>
     <th>Active</th>
     <th>Source</th>
   </tr>
+  </thead>
+  <tbody>
   {% for r in rows %}
-  <tr>
-    <td>{{ loop.index }}</td>
+  <tr class="{{ 'rank-top1' if loop.index == 1 else 'rank-top2' if loop.index == 2 else 'rank-top3' if loop.index == 3 else '' }}"
+      data-alias="{{ (r['alias'] or '') | lower }}" data-address="{{ r['address'] | lower }}"
+      data-roi_shrunk="{{ r['roi_shrunk'] if r['roi_shrunk'] is not none else '' }}"
+      data-roi_raw="{{ r['roi_raw'] if r['roi_raw'] is not none else '' }}"
+      data-resolved_positions="{{ r['resolved_positions'] if r['resolved_positions'] is not none else '' }}"
+      data-win_rate="{{ r['win_rate'] if r['win_rate'] is not none else '' }}"
+      data-hold_to_resolution_rate="{{ r['hold_to_resolution_rate'] if r['hold_to_resolution_rate'] is not none else '' }}"
+      data-trades_30d="{{ r['trades_30d'] if r['trades_30d'] is not none else '' }}">
+    <td class="rank-cell {{ 'top' if loop.index <= 3 }}">{{ loop.index }}</td>
     <td><a href="/traders/{{ r['address'] }}">{{ r['alias'] or r['address'][:10] + '…' }}</a></td>
-    <td>{{ '%.1f%%' % (r['roi_shrunk'] * 100) if r['roi_shrunk'] is not none else '—' }}</td>
-    <td>{{ '%.1f%%' % (r['roi_raw'] * 100) if r['roi_raw'] is not none else '—' }}</td>
-    <td>{{ r['resolved_positions'] }}</td>
-    <td>{{ '%.0f%%' % (r['win_rate'] * 100) if r['win_rate'] is not none else '—' }}</td>
-    <td>{{ '%.0f%%' % (r['hold_to_resolution_rate'] * 100) if r['hold_to_resolution_rate'] is not none else '—' }}</td>
-    <td>{{ r['trades_30d'] }}</td>
-    <td>{{ '✓' if r['trader_active'] else '—' }}</td>
-    <td>{{ r['discovery_source'] }}</td>
+    <td class="num">{{ '%.1f%%' % (r['roi_shrunk'] * 100) if r['roi_shrunk'] is not none else '—' }}</td>
+    <td class="num">{{ '%.1f%%' % (r['roi_raw'] * 100) if r['roi_raw'] is not none else '—' }}</td>
+    <td class="num">{{ r['resolved_positions'] if r['resolved_positions'] is not none else '—' }}</td>
+    <td class="num">{{ '%.0f%%' % (r['win_rate'] * 100) if r['win_rate'] is not none else '—' }}</td>
+    <td class="num">{{ '%.0f%%' % (r['hold_to_resolution_rate'] * 100) if r['hold_to_resolution_rate'] is not none else '—' }}</td>
+    <td class="num">{{ r['trades_30d'] if r['trades_30d'] is not none else '—' }}</td>
+    <td>{% if r['trader_active'] %}<span class="badge badge-good"><span class="glyph">&#10003;</span>Active</span>{% else %}<span class="badge badge-neutral">—</span>{% endif %}</td>
+    <td><code>{{ r['discovery_source'] }}</code></td>
   </tr>
   {% else %}
-  <tr><td colspan="10" class="placeholder">No snapshots yet — run the Scout (`python -m polyprinter.scout.run`).</td></tr>
+  <tr><td colspan="9" class="placeholder">No snapshots yet — run the Scout (`python -m polyprinter.scout.run`).</td></tr>
   {% endfor %}
+  </tbody>
 </table>
+</div>
+<p id="trader-empty" class="placeholder" style="display:none;">No traders match that filter.</p>
+
+<script>
+(function () {
+  var input = document.getElementById('trader-filter');
+  var table = document.getElementById('traders-table');
+  if (!table) return;
+  var tbody = table.tBodies[0];
+  var rows = Array.prototype.slice.call(tbody.rows).filter(function (r) { return r.hasAttribute('data-address'); });
+  var emptyMsg = document.getElementById('trader-empty');
+
+  input && input.addEventListener('input', function () {
+    var q = input.value.trim().toLowerCase();
+    var shown = 0;
+    rows.forEach(function (r) {
+      var match = !q || r.getAttribute('data-alias').indexOf(q) !== -1 || r.getAttribute('data-address').indexOf(q) !== -1;
+      r.style.display = match ? '' : 'none';
+      if (match) shown++;
+    });
+    emptyMsg.style.display = shown === 0 ? '' : 'none';
+  });
+
+  var headers = table.querySelectorAll('th.sortable');
+  var sortState = { key: null, dir: 1 };
+  headers.forEach(function (th) {
+    th.addEventListener('click', function () {
+      var key = th.getAttribute('data-key');
+      sortState.dir = (sortState.key === key) ? -sortState.dir : -1;
+      sortState.key = key;
+      headers.forEach(function (h) { h.classList.remove('sorted'); });
+      th.classList.add('sorted');
+      th.querySelector('.arrow').innerHTML = sortState.dir === 1 ? '&#9652;' : '&#9662;';
+
+      var sorted = rows.slice().sort(function (a, b) {
+        var av = a.getAttribute('data-' + key), bv = b.getAttribute('data-' + key);
+        var an = av === '' ? null : parseFloat(av), bn = bv === '' ? null : parseFloat(bv);
+        if (an === null && bn === null) return 0;
+        if (an === null) return 1;   // blanks sort last regardless of direction
+        if (bn === null) return -1;
+        return (an - bn) * sortState.dir;
+      });
+      sorted.forEach(function (r) { tbody.appendChild(r); });
+    });
+  });
+})();
+</script>
 {% endblock %}
