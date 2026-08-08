@@ -21,6 +21,14 @@ services:
     command: ["python", "-m", "polyprinter.mirror.run", "--loop"]
     volumes:
       - ./data:/app/data
+    # Phase 4 (on-chain event detection): only this one var, same
+    # least-privilege allowlist as scout's OPENROUTER_* block above —
+    # this container has no business seeing Telegram/Phase-6 secrets
+    # either. Missing/empty is intentional: mirror/run.py logs
+    # "mirror.chain.disabled" and skips the chain watcher entirely,
+    # doesn't crash — same pattern as mandate/issue.py.
+    environment:
+      POLYGON_RPC_URL: ${POLYGON_RPC_URL:-}
     restart: unless-stopped
 
   dashboard:
