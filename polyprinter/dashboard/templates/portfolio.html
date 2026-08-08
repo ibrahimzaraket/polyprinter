@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %} — Portfolio{% endblock %}
+{% block content %}
+<div class="page-lede">
+  <h1>Portfolio</h1>
+  <span class="badge badge-neutral" title="Live trading is deferred until paper trading proves out">PAPER</span>
+</div>
+<p>Our own paper account — not any trader's dossier. Bankroll, what's actually deployed, what it's made or lost, and every trade our copy-trading has placed. See <a href="/traders">Traders</a> to choose who to tail, or <a href="/decisions">Decisions</a> for the full log including skips.</p>
+
+<div class="stat-grid">
+  <div class="stat-tile">
+    <div class="label">Bankroll</div>
+    <div class="value">${{ '%.0f' % summary['bankroll'] }}</div>
+    <div class="sub">fixed paper starting capital — what sizing is calculated against</div>
+  </div>
+
+  <div class="stat-tile">
+    <div class="label">Deployed</div>
+    <div class="value">${{ '%.0f' % summary['open_exposure'] }}</div>
+    <div class="sub">${{ '%.0f' % summary['available_capital'] }} free for the next entry</div>
+  </div>
+
+  <div class="stat-tile {{ 'accent-good' if summary['realized_pnl'] > 0 else 'accent-critical' if summary['realized_pnl'] < 0 else '' }}">
+    <div class="label">Realized P&amp;L</div>
+    <div class="value" style="color: {{ 'var(--good)' if summary['realized_pnl'] > 0 else 'var(--critical)' if summary['realized_pnl'] < 0 else 'inherit' }};">{{ '+$%.0f' % summary['realized_pnl'] if summary['realized_pnl'] > 0 else '$%.0f' % summary['realized_pnl'] }}</div>
+    <div class="sub">{{ summary['resolved_n'] }} resolved trade{{ '' if summary['resolved_n'] == 1 else 's' }}{% if summary['win_rate'] is not none %} &middot; {{ '%.0f%%' % (summary['win_rate'] * 100) }} win rate{% endif %}</div>
+  </div>
+
+  <div class="stat-tile">
+    <div class="label">Equity</div>
+    <div class="value">${{ '%.0f' % summary['equity'] }}</div>
+    <div class="sub">bankroll + realized P&amp;L — open positions carried at cost, not marked live</div>
+  </div>
+</div>
+
+<div class="stat-grid" style="grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));">
+  <div class="stat-tile">
+    <div class="label">Open positions</div>
+    <div class="value">{{ open_positions | length }}</div>
+  </div>
+  <div class="stat-tile">
+    <div class="label">Copy tax <a class="hint" href="/definitions#copy-tax" title="What is copy tax?">?</a></div>
+    {% if summary['copy_tax_avg_cents'] is not none %}
+    <div class="value">{{ '%.2f¢' % summary['copy_tax_avg_cents'] }}</div>
+    <div class="sub">avg. round-trip, {{ summary['copy_tax_n'] }} resolved</div>
+    {% else %}
+    <div class="value">—</div>
+    <div class="sub">no resolved copy trades yet</div>
+    {% endif %}
+  </div>
+  <div class="stat-tile">
+    <div class="label">Trades placed</div>
+    <div class="value">{{ trade_log | length }}{% if trade_log | length == 50 %}+{% endif %}</div>
+    <div class="sub">entries + exits, most recent {{ trade_log | length }} shown below</div>
+  </div>
+</div>
+
+<h2>Equity curve</h2>
+{% if equity_curve %}
+<div class="card">
+  <svg class="sparkline" viewBox="0 0 {{ equity_curve['width'] }} {{ equity_curve['height'] }}" preserveAspectRatio="none" style="width:100%; height:{{ equity_curve['height'] }}px;" aria-label="Account equity over {{ equity_curve['n'] }} resolved trades">
+    <polyline points="{{ equity_curve['points'] }}" fill="none" stroke="{{ 'var(--good)' if equity_curve['up'] else 'var(--critical)' }}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" />
+    <circle cx="{{ equity_curve['last_x'] }}" cy="{{ equity_curve['last_y'] }}" r="4" fill="{{ 'var(--good)' if equity_curve['up'] else 'var(--critical)' }}" stroke="var(--surface)" stroke-width="2" />
+  </svg>
+  <div class="metric-row-sub"><span>${{ '%.0f' % equity_curve['first_value'] }}</span><span>{{ equity_curve['n'] }} resolved trades</span><span>${{ '%.0f' % equity_curve['last_value'] }}</span></div>
+</div>
+<p class="muted" style="margin-top: var(--sp-2);">Cumulative realized P&amp;L against the starting bankroll, one point per resolved trade in order. Open positions aren't marked to a live price yet, so this line moves only when a trade actually resolves.</p>
+{% else %}
+<div class="empty-state">
+  <div class="glyph">&#128200;</div>
+  <div class="headline">Not enough resolved trades yet</div>
+  <p>The equity curve needs at least 2 resolved (won or lost) paper trades to draw a line. It'll fill in as positions actually close out.</p>
+</div>
+{% endif %}
+
+<h2>Open positions{% if open_positions %} ({{ open_positions | length }}){% endif %}</h2>
+{% if open_positions %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th>Market</th><th>Outcome</th><th>Tailing</th><th>Status</th>
+    <th class="num">Shares</th><th class="num">Our entry</th><th class="num">Their entry</th>
+    <th class="num">Cost</th><th>Opened</th>
+  </tr>
+  {% for p in open_positions %}
+  <tr>
+    <td style="white-space: normal; min-width: 200px;">
+      {% if p['slug'] %}<a href="https://polymarket.com/event/{{ p['slug'] }}" target="_blank" rel="noopener">{{ p['title'] or p['market_id'] }}</a>{% else %}{{ p['title'] or p['market_id'] }}{% endif %}
+    </td>
+    <td>{{ p['outcome'] or '—' }}</td>
+    <td><a href="/traders/{{ p['address'] }}">{{ p['address'][:10] }}&hellip;</a></td>
+    <td><span class="badge {{ 'badge-good' if p['status'] == 'OPEN' else 'badge-accent' }}">{{ p['status'] }}</span></td>
+    <td class="num">{{ '%.1f' % p['shares_open'] }}</td>
+    <td class="num">{{ '%.0f¢' % (p['our_entry_price'] * 100) }}</td>
+    <td class="num">{{ '%.0f¢' % (p['their_entry_price'] * 100) }}</td>
+    <td class="num">${{ '%.2f' % p['cost_usd'] }}</td>
+    <td class="mono">{{ p['opened_at'] }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+{% else %}
+<div class="empty-state">
+  <div class="glyph">&#128203;</div>
+  <div class="headline">No open positions</div>
+  <p>Nothing deployed right now. Tail a trader and set a mandate on their page — the next trade they make that clears the mandate's checks will open a position here.</p>
+</div>
+{% endif %}
+
+<h2>Resolved positions{% if closed_positions %} ({{ closed_positions | length }}){% endif %}</h2>
+{% if closed_positions %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th>Market</th><th>Outcome</th><th>Tailing</th>
+    <th class="num">Cost</th><th class="num">Realized P&amp;L</th><th class="num">ROI</th>
+    <th class="num">Copy tax</th><th>Resolved</th>
+  </tr>
+  {% for p in closed_positions %}
+  <tr>
+    <td style="white-space: normal; min-width: 200px;">
+      {% if p['slug'] %}<a href="https://polymarket.com/event/{{ p['slug'] }}" target="_blank" rel="noopener">{{ p['title'] or p['market_id'] }}</a>{% else %}{{ p['title'] or p['market_id'] }}{% endif %}
+    </td>
+    <td>{{ p['outcome'] or '—' }}</td>
+    <td><a href="/traders/{{ p['address'] }}">{{ p['address'][:10] }}&hellip;</a></td>
+    <td class="num">${{ '%.2f' % p['cost_usd'] }}</td>
+    <td class="num"><span style="color: {{ 'var(--good)' if p['our_pnl_usd'] > 0 else 'var(--critical)' if p['our_pnl_usd'] < 0 else 'inherit' }};">{{ '+$%.2f' % p['our_pnl_usd'] if p['our_pnl_usd'] > 0 else '$%.2f' % p['our_pnl_usd'] }}</span></td>
+    <td class="num">{{ '%.1f%%' % (p['our_roi'] * 100) if p['our_roi'] is not none else '—' }}</td>
+    <td class="num">{{ '%.2f¢' % p['copy_tax_total_cents'] if p['copy_tax_total_cents'] is not none else '—' }}</td>
+    <td class="mono">{{ p['resolved_at'] }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+<p class="muted" style="margin-top: var(--sp-2);">Most recent {{ closed_positions | length }} resolved trades. Positions that have closed but haven't resolved yet (Learner hasn't computed an outcome) aren't shown here.</p>
+{% else %}
+<div class="empty-state">
+  <div class="glyph">&#127919;</div>
+  <div class="headline">Nothing resolved yet</div>
+  <p>Once a position we've taken resolves (or we mirror an exit), the realized result shows up here.</p>
+</div>
+{% endif %}
+
+<h2>Trade log{% if trade_log %} ({{ trade_log | length }}){% endif %}</h2>
+{% if trade_log %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th>When</th><th>Verdict</th><th>Tailing</th><th>Market</th>
+    <th class="num">Their fill</th><th class="num">Size</th><th>Latency</th>
+  </tr>
+  {% for t in trade_log %}
+  <tr>
+    <td class="mono">{{ t['decided_at'] }}</td>
+    <td><span class="badge {{ 'badge-good' if t['verdict'] == 'TAKE' else 'badge-accent' }}">{{ t['verdict'] }}</span></td>
+    <td><a href="/traders/{{ t['address'] }}">{{ t['address'][:10] }}&hellip;</a></td>
+    <td style="white-space: normal; min-width: 200px;">{{ t['title'] or t['market_id'] }}</td>
+    <td class="num">{{ t['side'] }} @ {{ '%.0f¢' % (t['their_price'] * 100) }}</td>
+    <td class="num">${{ '%.2f' % t['size_usd'] if t['size_usd'] is not none else '—' }}</td>
+    <td>{{ t['latency_ms'] }}ms</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+<p class="muted" style="margin-top: var(--sp-2);">Every TAKE (entry) and MIRROR_EXIT (exit) decision our own paper book has acted on, most recent first. Skipped trades — and why — are in <a href="/decisions">Decisions</a>, not here.</p>
+{% else %}
+<div class="empty-state">
+  <div class="glyph">&#9889;</div>
+  <div class="headline">No paper trades placed yet</div>
+  <p>This fills in the moment a tailed trader you've authorized (mandate set on their page) makes a trade that clears sizing and price checks. Every observed trade from anyone you're watching gets logged as a decision either way — check <a href="/decisions">Decisions</a> to see why a specific trade was skipped (no mandate yet, price band, portfolio cap, etc).</p>
+</div>
+{% endif %}
+{% endblock %}

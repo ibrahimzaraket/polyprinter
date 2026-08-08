@@ -27,12 +27,21 @@ from polyprinter import config_write
 from polyprinter.config import load_config
 from polyprinter.db.conn import get_connection
 from polyprinter.mandate import operator as operator_mandate
+from polyprinter.mirror import sizing as mirror_sizing
+from polyprinter.mirror.run import DEFAULT_MIRROR_CONFIG
 from polyprinter.mirror.watch_poll import ensure_pinned_traders_exist, select_watchlist
 from polyprinter.obs import heartbeat
 from polyprinter.obs.log import Logger
 from polyprinter.scout import category_score
 from polyprinter.scout.strategy import maybe_generate_strategy
 from polyprinter.sources.openrouter import OpenRouterClient
+
+# Paper is the only mode this whole build runs in today (live trading is
+# explicitly deferred — see the root plan doc); every "our own book" query
+# below is filtered by this constant rather than a hardcoded string
+# scattered across each query, so the one place that changes on go-live
+# day is this line, not a grep-and-replace.
+PAPER_MODE = "paper"
 
 SERVICE = "dashboard"
 # Bind 0.0.0.0 *inside* the container — Docker's port-forwarding arrives via
@@ -257,6 +266,202 @@ def _pnl_by_market(conn: sqlite3.Connection, address: str, *, limit: int = PNL_B
 
     rows.sort(key=lambda r: abs(r["total_pnl"]), reverse=True)
     return rows[:limit]
+
+
+def _bankroll_usd() -> float:
+    """Same merge mirror/run.py's own _mirror_config() does (defaults
+    overridden by config.yaml's `mirror:` block) — read here too so the
+    Portfolio page shows the exact bankroll figure sizing.py actually
+    sizes against, not a second hardcoded guess at it.
+    """
+    return {**DEFAULT_MIRROR_CONFIG, **load_config().get("mirror", {})}["paper_bankroll_usd"]
+
+
+def _market_context(conn: sqlite3.Connection, address: str, market_id: str) -> dict:
+    """Best-effort title/outcome/slug for one of OUR OWN positions,
+    resolved from the same trader's already-archived /activity payload
+    _recent_trades already reads (matched on conditionId == market_id,
+    the same field watch_poll.py's _insert_observed_trade stores as
+    market_id). positions/observed_trades store market_id/token_id only
+    — no title column, see docs/SCHEMA.md — so this is presentation-only,
+    same "no new API call, reuse what Scout already archived" pattern as
+    _recent_trades/_pnl_by_market above. Best-effort: if the trader's
+    archived activity has since scrolled past this trade (only the most
+    recent RECENT_TRADES_LIMIT-ish page is kept live), this returns {}
+    and the caller falls back to showing the raw market_id.
+    """
+    row = conn.execute(
+        """
+        SELECT body FROM raw_responses
+        WHERE source = 'data-api' AND url LIKE '%/activity%'
+          AND url LIKE ? AND url LIKE '%offset=0%'
+        ORDER BY fetched_at DESC LIMIT 1
+        """,
+        (f"%user={address}%",),
+    ).fetchone()
+    if row is None:
+        return {}
+    try:
+        entries = json.loads(row["body"])
+    except (TypeError, ValueError):
+        return {}
+    for e in entries:
+        if e.get("conditionId") == market_id:
+            return {"title": e.get("title"), "outcome": e.get("outcome"), "slug": e.get("slug")}
+    return {}
+
+
+def _our_open_positions(conn: sqlite3.Connection, *, mode: str = PAPER_MODE) -> list[dict]:
+    """Every position we (paper-)hold right now, newest-opened first."""
+    rows = conn.execute(
+        "SELECT * FROM positions WHERE mode = ? AND status IN ('OPEN', 'PARTIAL') ORDER BY opened_at DESC",
+        (mode,),
+    ).fetchall()
+    out = []
+    for p in rows:
+        ctx = _market_context(conn, p["address"], p["market_id"])
+        out.append({**dict(p), "title": ctx.get("title"), "outcome": ctx.get("outcome"), "slug": ctx.get("slug")})
+    return out
+
+
+OUR_CLOSED_POSITIONS_LIMIT = 50
+
+
+def _our_closed_positions(conn: sqlite3.Connection, *, mode: str = PAPER_MODE, limit: int = OUR_CLOSED_POSITIONS_LIMIT) -> list[dict]:
+    """Resolved positions with a real outcome — the actual, realized
+    record. Positions can also be CLOSED without a resolved outcome yet
+    (Learner hasn't run) — that in-between state is deliberately not
+    shown here (nothing to report until there's a real P&L number), the
+    same way trader_detail's own dossier only shows what's actually
+    computed.
+    """
+    rows = conn.execute(
+        """
+        SELECT p.*, o.our_pnl_usd, o.our_roi, o.copy_tax_total_cents, o.resolved_at, o.resolution
+        FROM positions p JOIN outcomes o ON o.position_id = p.id
+        WHERE p.mode = ?
+        ORDER BY o.resolved_at DESC LIMIT ?
+        """,
+        (mode, limit),
+    ).fetchall()
+    out = []
+    for p in rows:
+        ctx = _market_context(conn, p["address"], p["market_id"])
+        out.append({**dict(p), "title": ctx.get("title"), "outcome": ctx.get("outcome"), "slug": ctx.get("slug")})
+    return out
+
+
+OUR_TRADE_LOG_LIMIT = 50
+
+
+def _our_trade_log(conn: sqlite3.Connection, *, mode: str = PAPER_MODE, limit: int = OUR_TRADE_LOG_LIMIT) -> list[dict]:
+    """Every decision that actually moved our book — TAKE (entries) and
+    MIRROR_EXIT (exits) — most recent first. This is the paper trade
+    blotter; /decisions shows every decision including skips, which is a
+    debugging view, not "what did we actually do."
+    """
+    rows = conn.execute(
+        """
+        SELECT d.*, ot.address, ot.market_id, ot.token_id, ot.side, ot.shares,
+               ot.price AS their_price, ot.block_ts
+        FROM decisions d JOIN observed_trades ot ON ot.id = d.observed_trade_id
+        WHERE d.mode = ? AND d.verdict IN ('TAKE', 'MIRROR_EXIT')
+        ORDER BY d.decided_at DESC LIMIT ?
+        """,
+        (mode, limit),
+    ).fetchall()
+    out = []
+    for d in rows:
+        ctx = _market_context(conn, d["address"], d["market_id"])
+        out.append({**dict(d), "title": ctx.get("title")})
+    return out
+
+
+def _our_summary(conn: sqlite3.Connection, *, mode: str = PAPER_MODE) -> dict:
+    """The headline numbers for the Portfolio page. `equity` is the
+    starting bankroll plus realized P&L only — it deliberately does NOT
+    mark open positions to their current price (nothing in this codebase
+    fetches a live price for OUR OWN open token_id on a schedule yet, only
+    for traders we're scouting); an open position is carried at cost until
+    it resolves or we exit it, same understated-not-overstated bias
+    outcomes.our_pnl_usd already uses (only realized P&L is written
+    there). `bankroll` itself never grows/shrinks with P&L (config-fixed,
+    per the operator's own explicit call) — that's the number sizing.py
+    actually sizes new trades against; `equity` is the separate, honest
+    "how are we actually doing" figure shown alongside it.
+    """
+    bankroll = _bankroll_usd()
+    open_exposure = mirror_sizing.portfolio_exposure_usd(conn, mode)
+    resolved = conn.execute(
+        "SELECT o.our_pnl_usd FROM outcomes o JOIN positions p ON p.id = o.position_id WHERE p.mode = ?",
+        (mode,),
+    ).fetchall()
+    realized_pnl = sum(r["our_pnl_usd"] for r in resolved)
+    resolved_n = len(resolved)
+    win_n = sum(1 for r in resolved if r["our_pnl_usd"] > 0)
+    copy_tax_row = conn.execute(
+        "SELECT AVG(o.copy_tax_total_cents) AS avg_cents, COUNT(*) AS n FROM outcomes o "
+        "JOIN positions p ON p.id = o.position_id WHERE p.mode = ? AND o.copy_tax_total_cents IS NOT NULL",
+        (mode,),
+    ).fetchone()
+    return {
+        "bankroll": bankroll,
+        "open_exposure": open_exposure,
+        "available_capital": bankroll - open_exposure,
+        "realized_pnl": realized_pnl,
+        "equity": bankroll + realized_pnl,
+        "resolved_n": resolved_n,
+        "win_rate": (win_n / resolved_n) if resolved_n else None,
+        "copy_tax_avg_cents": copy_tax_row["avg_cents"],
+        "copy_tax_n": copy_tax_row["n"],
+    }
+
+
+def _equity_curve(conn: sqlite3.Connection, *, mode: str = PAPER_MODE, bankroll: float, width: int = 640, height: int = 160, pad: float = 8.0) -> dict | None:
+    """Cumulative realized P&L over time, starting from the bankroll —
+    the account's actual equity line. Same "None below 2 points" contract
+    as _sparkline (a lone value has no trend to draw), and same
+    realized-only caveat as _our_summary's `equity` above: unrealized
+    swings on still-open positions aren't in this line.
+    """
+    rows = conn.execute(
+        "SELECT o.resolved_at, o.our_pnl_usd FROM outcomes o "
+        "JOIN positions p ON p.id = o.position_id "
+        "WHERE p.mode = ? AND o.resolved_at IS NOT NULL ORDER BY o.resolved_at ASC",
+        (mode,),
+    ).fetchall()
+    if len(rows) < 2:
+        return None
+    running = bankroll
+    values = []
+    for r in rows:
+        running += r["our_pnl_usd"]
+        values.append(running)
+
+    x_span = (len(values) - 1) or 1
+    y_min, y_max = min(values), max(values)
+    y_span = (y_max - y_min) or 1
+
+    def sx(i: int) -> float:
+        return pad + i / x_span * (width - 2 * pad)
+
+    def sy(v: float) -> float:
+        return height - pad - (v - y_min) / y_span * (height - 2 * pad)
+
+    coords = [(sx(i), sy(v)) for i, v in enumerate(values)]
+    points_str = " ".join(f"{x:.1f},{y:.1f}" for x, y in coords)
+    last_x, last_y = coords[-1]
+    return {
+        "points": points_str,
+        "width": width,
+        "height": height,
+        "last_x": last_x,
+        "last_y": last_y,
+        "first_value": values[0],
+        "last_value": values[-1],
+        "n": len(values),
+        "up": values[-1] >= values[0],
+    }
 
 
 def _latest_snapshot_per_trader(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -572,6 +777,31 @@ def analyze_trader(address: str):
         )
     conn.commit()
     return redirect(url_for("trader_detail", address=address))
+
+
+@app.route("/portfolio")
+def portfolio() -> str:
+    """Our own paper account: bankroll/exposure/realized P&L, every open
+    and resolved position, the trade blotter, and an equity curve. This
+    is the "can I actually see what my copy-trading is doing" view that
+    /traders' "My Copy Portfolio" section (their dossiers) and /decisions
+    (every decision, including skips) don't cover on their own.
+    """
+    conn = get_db()
+    summary = _our_summary(conn)
+    open_positions = _our_open_positions(conn)
+    closed_positions = _our_closed_positions(conn)
+    trade_log = _our_trade_log(conn)
+    equity_curve = _equity_curve(conn, bankroll=summary["bankroll"])
+    return render_template(
+        "portfolio.html",
+        summary=summary,
+        open_positions=open_positions,
+        closed_positions=closed_positions,
+        trade_log=trade_log,
+        equity_curve=equity_curve,
+        active_tab="portfolio",
+    )
 
 
 @app.route("/decisions")
