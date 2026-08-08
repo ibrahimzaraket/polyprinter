@@ -234,4 +234,8 @@ CREATE TABLE raw_responses (            -- every external call, before parsing
     fetched_at  TEXT NOT NULL,
     status      INTEGER,
     body        TEXT
+    -- body_hash + its dedup index are added by migrations/0002_raw_responses_dedup.sql,
+    -- not here — schema.sql is only ever replayed as migration 1, so a column
+    -- added here would collide with 0002's ALTER TABLE on a fresh install.
+    -- See that file for why the column exists at all.
 );
