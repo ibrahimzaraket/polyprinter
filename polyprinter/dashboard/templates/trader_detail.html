@@ -125,16 +125,14 @@
 
   <div class="card">
     <div class="section-label">Performance</div>
-    {{ metric_row('P&L 24h', '$%.0f' % latest['realised_pnl_24h_usd'] if latest['realised_pnl_24h_usd'] is not none else '—') }}
-    {{ metric_row('P&L 7d', '$%.0f' % latest['realised_pnl_7d_usd'] if latest['realised_pnl_7d_usd'] is not none else '—') }}
-    {{ metric_row('P&L lifetime', '$%.0f' % latest['realised_pnl_usd'] if latest['realised_pnl_usd'] is not none else '—') }}
-    {{ metric_row('ROI (shrunk)', '%.1f%%' % (latest['roi_shrunk'] * 100) if latest['roi_shrunk'] is not none else '—', 'shrinkage', sparklines.get('roi_shrunk')) }}
-    {{ metric_row('ROI (raw)', '%.1f%%' % (latest['roi_raw'] * 100) if latest['roi_raw'] is not none else '—', 'roi') }}
-    {{ metric_row('Win rate', '%.0f%%' % (latest['win_rate'] * 100) if latest['win_rate'] is not none else '—', 'win-rate', sparklines.get('win_rate')) }}
-    {{ metric_row('Avg win', '$%.0f' % latest['avg_win_usd'] if latest['avg_win_usd'] is not none else '—', 'avg-win-loss') }}
-    {{ metric_row('Avg loss', '$%.0f' % latest['avg_loss_usd'] if latest['avg_loss_usd'] is not none else '—', 'avg-win-loss') }}
-    {{ metric_row('Win/loss ratio', '%.2f' % latest['win_loss_ratio'] if latest['win_loss_ratio'] is not none else '—', 'avg-win-loss') }}
-    {{ metric_row('Resolved positions', latest['resolved_positions'] if latest['resolved_positions'] is not none else '—') }}
+    <div class="metric-row">
+      <div class="metric-row-top"><span class="metric-label">P&amp;L — 24h / 7d / lifetime</span>
+        <span class="metric-value">{{ '$%.0f' % latest['realised_pnl_usd'] if latest['realised_pnl_usd'] is not none else '—' }}</span></div>
+      <div class="metric-row-sub"><span>24h {{ '%+.0f' % latest['realised_pnl_24h_usd'] if latest['realised_pnl_24h_usd'] is not none else '—' }}</span><span>7d {{ '%+.0f' % latest['realised_pnl_7d_usd'] if latest['realised_pnl_7d_usd'] is not none else '—' }}</span></div>
+    </div>
+    {{ metric_row('ROI (shrunk, raw: ' + ('%.1f%%' % (latest['roi_raw'] * 100) if latest['roi_raw'] is not none else '—') + ')', '%.1f%%' % (latest['roi_shrunk'] * 100) if latest['roi_shrunk'] is not none else '—', 'shrinkage', sparklines.get('roi_shrunk')) }}
+    {{ metric_row('Win rate (' + (latest['resolved_positions'] | string if latest['resolved_positions'] is not none else '0') + ' resolved)', '%.0f%%' % (latest['win_rate'] * 100) if latest['win_rate'] is not none else '—', 'win-rate', sparklines.get('win_rate')) }}
+    {{ metric_row('Avg win / loss (ratio)', ('$%.0f / $%.0f (%.2f×)' % (latest['avg_win_usd'], latest['avg_loss_usd'], latest['win_loss_ratio'])) if latest['avg_win_usd'] is not none and latest['avg_loss_usd'] is not none and latest['win_loss_ratio'] is not none else '—', 'avg-win-loss') }}
     {{ metric_row('Capital deployed', '$%.0f' % latest['capital_deployed_usd'] if latest['capital_deployed_usd'] is not none else '—') }}
 
     <div class="metric-row">
@@ -152,8 +150,7 @@
   <div class="card">
     <div class="section-label">Copyability</div>
     {{ metric_row('Hold-to-resolution rate', '%.0f%%' % (latest['hold_to_resolution_rate'] * 100) if latest['hold_to_resolution_rate'] is not none else '—', 'hold-to-resolution', sparklines.get('hold_to_resolution_rate')) }}
-    {{ metric_row('Median hold', '%.1f h' % latest['median_hold_hours'] if latest['median_hold_hours'] is not none else '—', 'holding-period') }}
-    {{ metric_row('p90 hold', '%.1f h' % latest['p90_hold_hours'] if latest['p90_hold_hours'] is not none else '—', 'holding-period') }}
+    {{ metric_row('Holding period — median / p90', ('%.1fh / %.1fh' % (latest['median_hold_hours'], latest['p90_hold_hours'])) if latest['median_hold_hours'] is not none and latest['p90_hold_hours'] is not none else '—', 'holding-period') }}
 
     <div class="metric-row">
       <div class="metric-row-top"><span class="metric-label">Entry price (p10 / median / p90) <a class="hint" href="/definitions#entry-price-deciles" title="What is entry price distribution?">?</a></span></div>
@@ -175,8 +172,7 @@
     </div>
 
     {{ metric_row('Sizing pattern (CV)', '%.2f' % latest['sizing_cv'] if latest['sizing_cv'] is not none else '—', 'sizing-pattern', sparklines.get('sizing_cv')) }}
-    {{ metric_row('Scale-in/out frequency', '%.0f%%' % (latest['scale_frequency'] * 100) if latest['scale_frequency'] is not none else '—') }}
-    {{ metric_row('Median market liquidity', '$%.0f' % latest['median_market_liquidity'] if latest['median_market_liquidity'] is not none else '—') }}
+    {{ metric_row('Scale-in/out freq. · median liquidity', (('%.0f%%' % (latest['scale_frequency'] * 100)) + ' · $' + ('%.0f' % latest['median_market_liquidity'])) if latest['scale_frequency'] is not none and latest['median_market_liquidity'] is not none else '—') }}
 
     {% if category_mix %}
     <div class="metric-row">
@@ -192,8 +188,7 @@
 
   <div class="card">
     <div class="section-label">Liveness</div>
-    {{ metric_row('Trades (7d)', latest['trades_7d'] if latest['trades_7d'] is not none else 0) }}
-    {{ metric_row('Trades (30d)', latest['trades_30d'] if latest['trades_30d'] is not none else 0) }}
+    {{ metric_row('Trades — 7d / 30d', ((latest['trades_7d'] | string if latest['trades_7d'] is not none else '0') + ' / ' + (latest['trades_30d'] | string if latest['trades_30d'] is not none else '0'))) }}
     {{ metric_row('Open positions', latest['open_positions'] if latest['open_positions'] is not none else 0) }}
     <div class="metric-row">
       <div class="metric-row-top">
@@ -218,8 +213,7 @@
 <div class="table-wrap">
 <table>
   <tr>
-    <th>Category</th><th>Grade</th><th class="num">Score</th><th class="num">Resolved</th>
-    <th class="num">Win rate</th><th class="num">Entry median</th><th class="num">P&amp;L concentration</th><th class="num">Sizing CV</th>
+    <th>Category</th><th>Grade</th><th class="num">Score</th><th class="num">Win rate (resolved)</th><th>Signals</th>
   </tr>
   {% for c in category_scores %}
   <tr>
@@ -229,11 +223,8 @@
       {% else %}<span class="badge badge-neutral" title="Fewer than 3 resolved positions in this category">insufficient sample</span>{% endif %}
     </td>
     <td class="num">{{ '%.0f' % c.score }}</td>
-    <td class="num">{{ c.n_resolved }}</td>
-    <td class="num">{{ '%.0f%%' % (c.win_rate * 100) if c.win_rate is not none else '—' }}</td>
-    <td class="num">{{ '%.0f¢' % (c.entry_price_median * 100) if c.entry_price_median is not none else '—' }}</td>
-    <td class="num">{{ '%.0f%%' % (c.concentration_top1 * 100) if c.concentration_top1 is not none else '—' }}</td>
-    <td class="num">{{ '%.2f' % c.sizing_cv if c.sizing_cv is not none else '—' }}</td>
+    <td class="num">{{ '%.0f%%' % (c.win_rate * 100) if c.win_rate is not none else '—' }} ({{ c.n_resolved }})</td>
+    <td class="muted">entry {{ '%.0f¢' % (c.entry_price_median * 100) if c.entry_price_median is not none else '—' }} &middot; concentration {{ '%.0f%%' % (c.concentration_top1 * 100) if c.concentration_top1 is not none else '—' }} &middot; sizing CV {{ '%.2f' % c.sizing_cv if c.sizing_cv is not none else '—' }}</td>
   </tr>
   {% endfor %}
 </table>
@@ -252,33 +243,27 @@
 <div class="table-wrap">
 <table>
   <tr>
-    <th>Market</th><th>Outcome</th><th>Status</th>
-    <th class="num">Realized</th><th class="num">Unrealized</th><th class="num">Total P&amp;L</th>
-    <th class="num">Size</th><th class="num">Avg price</th><th class="num">Cur price</th>
+    <th>Market</th><th>Status</th><th class="num">P&amp;L</th><th class="num">Size @ price</th>
   </tr>
   {% for m in pnl_by_market %}
   <tr>
     <td style="white-space: normal; min-width: 200px;">
       {% if m['slug'] %}<a href="https://polymarket.com/event/{{ m['slug'] }}" target="_blank" rel="noopener">{{ m['title'] or m['slug'] }}</a>{% else %}{{ m['title'] or '—' }}{% endif %}
+      {% if m['outcome'] %}<span class="muted">— {{ m['outcome'] }}</span>{% endif %}
     </td>
-    <td>{{ m['outcome'] or '—' }}</td>
     <td>{% if m['status'] == 'OPEN' %}<span class="badge badge-accent">OPEN</span>{% else %}<span class="badge badge-neutral">CLOSED</span>{% endif %}</td>
     <td class="num">
-      {% if m['realized_pnl'] is not none %}
-      <span style="color: {{ 'var(--good)' if m['realized_pnl'] > 0 else 'var(--critical)' if m['realized_pnl'] < 0 else 'inherit' }};">{{ '+$%.0f' % m['realized_pnl'] if m['realized_pnl'] > 0 else '$%.0f' % m['realized_pnl'] }}</span>
-      {% else %}—{% endif %}
+      <div class="cell-stack">
+        <span class="primary" style="color: {{ 'var(--good)' if m['total_pnl'] > 0 else 'var(--critical)' if m['total_pnl'] < 0 else 'inherit' }};">{{ '+$%.0f' % m['total_pnl'] if m['total_pnl'] > 0 else '$%.0f' % m['total_pnl'] }}</span>
+        {% if m['status'] == 'OPEN' and m['realized_pnl'] is not none %}<span class="secondary">realized {{ '+$%.0f' % m['realized_pnl'] if m['realized_pnl'] > 0 else '$%.0f' % m['realized_pnl'] }}</span>{% endif %}
+      </div>
     </td>
     <td class="num">
-      {% if m['unrealized_pnl'] is not none %}
-      <span style="color: {{ 'var(--good)' if m['unrealized_pnl'] > 0 else 'var(--critical)' if m['unrealized_pnl'] < 0 else 'inherit' }};">{{ '+$%.0f' % m['unrealized_pnl'] if m['unrealized_pnl'] > 0 else '$%.0f' % m['unrealized_pnl'] }}</span>
-      {% else %}—{% endif %}
+      <div class="cell-stack">
+        <span class="primary">{{ '%.0f' % m['size'] if m['size'] is not none else '—' }} @ {{ '%.0f¢' % (m['avg_price'] * 100) if m['avg_price'] is not none else '—' }}</span>
+        {% if m['status'] == 'OPEN' and m['cur_price'] is not none %}<span class="secondary">now {{ '%.0f¢' % (m['cur_price'] * 100) }}</span>{% endif %}
+      </div>
     </td>
-    <td class="num">
-      <strong style="color: {{ 'var(--good)' if m['total_pnl'] > 0 else 'var(--critical)' if m['total_pnl'] < 0 else 'inherit' }};">{{ '+$%.0f' % m['total_pnl'] if m['total_pnl'] > 0 else '$%.0f' % m['total_pnl'] }}</strong>
-    </td>
-    <td class="num">{{ '%.0f' % m['size'] if m['size'] is not none else '—' }}</td>
-    <td class="num">{{ '%.0f¢' % (m['avg_price'] * 100) if m['avg_price'] is not none else '—' }}</td>
-    <td class="num">{{ '%.0f¢' % (m['cur_price'] * 100) if m['cur_price'] is not none else '—' }}</td>
   </tr>
   {% endfor %}
 </table>
@@ -297,24 +282,18 @@
 <div class="table-wrap">
 <table>
   <tr>
-    <th>When</th><th>Type</th><th>Side</th><th>Market</th><th>Outcome</th>
-    <th class="num">Price</th><th class="num">Size (USDC)</th>
+    <th>When</th><th>Action</th><th>Market</th><th class="num">Price</th><th class="num">Size (USDC)</th>
   </tr>
   {% for t in recent_trades %}
   <tr>
     <td class="mono">{{ t['when'] or '—' }}</td>
     <td>
-      {% if t['type'] == 'TRADE' %}<span class="badge badge-accent">{{ t['type'] }}</span>
-      {% elif t['type'] == 'REDEEM' %}<span class="badge badge-good">{{ t['type'] }}</span>
+      {% if t['type'] == 'TRADE' and t['side'] == 'BUY' %}<span class="badge badge-good">BUY</span>
+      {% elif t['type'] == 'TRADE' and t['side'] == 'SELL' %}<span class="badge badge-critical">SELL</span>
+      {% elif t['type'] == 'REDEEM' %}<span class="badge badge-accent">REDEEM</span>
       {% else %}<span class="badge badge-neutral">{{ t['type'] or '—' }}</span>{% endif %}
     </td>
-    <td>
-      {% if t['side'] == 'BUY' %}<span class="badge badge-good">{{ t['side'] }}</span>
-      {% elif t['side'] == 'SELL' %}<span class="badge badge-critical">{{ t['side'] }}</span>
-      {% else %}—{% endif %}
-    </td>
-    <td style="white-space: normal; min-width: 220px;">{{ t['title'] or '—' }}</td>
-    <td>{{ t['outcome'] or '—' }}</td>
+    <td style="white-space: normal; min-width: 220px;">{{ t['title'] or '—' }}{% if t['outcome'] %}<span class="muted"> — {{ t['outcome'] }}</span>{% endif %}</td>
     <td class="num">{{ '%.0f¢' % (t['price'] * 100) if t['price'] else '—' }}</td>
     <td class="num">{{ '$%.2f' % t['usdc_size'] if t['usdc_size'] is not none else '—' }}</td>
   </tr>
@@ -331,31 +310,24 @@
 {% endif %}
 
 <h2>Metric history ({{ snapshots | length }} snapshot{{ '' if snapshots|length == 1 else 's' }})</h2>
+<p class="muted" style="margin-top:-6px;">Trimmed to what changes meaningfully scan-to-scan — the sparklines above already chart ROI, win rate, hold-to-resolution, and sizing CV over these same snapshots.</p>
 <div class="table-wrap">
 <table>
   <tr>
-    <th>Scanned</th><th class="num">ROI shrunk</th><th class="num">ROI raw</th><th class="num">Resolved</th><th class="num">Win rate</th>
-    <th class="num">W/L ratio</th><th class="num">Hold-to-res.</th><th class="num">Median hold (h)</th><th class="num">Concentration top1</th>
-    <th class="num">Sizing CV</th><th class="num">Trades 7d</th><th class="num">Trades 30d</th><th class="num">Open pos.</th>
+    <th>Scanned</th><th class="num">ROI (shrunk)</th><th class="num">Win rate (resolved)</th>
+    <th class="num">Hold-to-res.</th><th class="num">Trades 7d / 30d</th><th class="num">Open pos.</th>
   </tr>
   {% for s in snapshots %}
   <tr>
     <td class="mono">{{ s['scanned_at'] }}</td>
     <td class="num">{{ '%.1f%%' % (s['roi_shrunk'] * 100) if s['roi_shrunk'] is not none else '—' }}</td>
-    <td class="num">{{ '%.1f%%' % (s['roi_raw'] * 100) if s['roi_raw'] is not none else '—' }}</td>
-    <td class="num">{{ s['resolved_positions'] }}</td>
-    <td class="num">{{ '%.0f%%' % (s['win_rate'] * 100) if s['win_rate'] is not none else '—' }}</td>
-    <td class="num">{{ '%.2f' % s['win_loss_ratio'] if s['win_loss_ratio'] is not none else '—' }}</td>
+    <td class="num">{{ '%.0f%%' % (s['win_rate'] * 100) if s['win_rate'] is not none else '—' }} ({{ s['resolved_positions'] }})</td>
     <td class="num">{{ '%.0f%%' % (s['hold_to_resolution_rate'] * 100) if s['hold_to_resolution_rate'] is not none else '—' }}</td>
-    <td class="num">{{ '%.1f' % s['median_hold_hours'] if s['median_hold_hours'] is not none else '—' }}</td>
-    <td class="num">{{ '%.0f%%' % (s['concentration_top1'] * 100) if s['concentration_top1'] is not none else '—' }}</td>
-    <td class="num">{{ '%.2f' % s['sizing_cv'] if s['sizing_cv'] is not none else '—' }}</td>
-    <td class="num">{{ s['trades_7d'] }}</td>
-    <td class="num">{{ s['trades_30d'] }}</td>
+    <td class="num">{{ s['trades_7d'] }} / {{ s['trades_30d'] }}</td>
     <td class="num">{{ s['open_positions'] }}</td>
   </tr>
   {% else %}
-  <tr><td colspan="13" class="placeholder">No snapshots yet.</td></tr>
+  <tr><td colspan="6" class="placeholder">No snapshots yet.</td></tr>
   {% endfor %}
 </table>
 </div>
