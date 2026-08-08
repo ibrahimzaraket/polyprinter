@@ -4,7 +4,9 @@ exit criterion: 100% decision coverage (invariant 1) and idempotency
 (FR-15) — a re-poll must not double-write.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+import pytest
 
 from polyprinter.db.conn import get_connection
 from polyprinter.obs.log import Logger
@@ -143,3 +145,59 @@ def test_select_watchlist_orders_by_shrunk_roi_desc(tmp_path):
 def test_select_watchlist_excludes_traders_with_no_snapshot(tmp_path):
     conn = _make_db(tmp_path)  # ADDRESS has no snapshot at all
     assert select_watchlist(conn, 20) == []
+
+
+def test_poll_trader_take_actually_opens_a_position(tmp_path):
+    """A TAKE decision must not just get logged — it has to open a real
+    positions row too (execute.py; see that module's docstring for the
+    gap this guards against regressing).
+    """
+    conn = _make_db(tmp_path)
+    conn.execute(
+        """
+        INSERT INTO mandates (
+            address, version, verdict, confidence, issued_at, expires_at, reasoning
+        ) VALUES (?, 1, 'FOLLOW', 'HIGH', ?, ?, 'test mandate')
+        """,
+        (ADDRESS, datetime.now(timezone.utc).isoformat(), (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()),
+    )
+    now = _now_epoch()
+    entries = [_trade_entry(tx_hash="0xa", ts=now, side="BUY", size=10, price=0.5)]
+    client = FakeClient(entries)
+
+    poll_trader(conn, client, _log(conn), ADDRESS, mode=MODE, mirror_config=MIRROR_CONFIG)
+
+    decision = conn.execute("SELECT * FROM decisions").fetchone()
+    assert decision["verdict"] == "TAKE"
+    positions = conn.execute("SELECT * FROM positions").fetchall()
+    assert len(positions) == 1
+    assert positions[0]["decision_id"] == decision["id"]
+    assert positions[0]["status"] == "OPEN"
+    assert positions[0]["shares_open"] > 0
+
+
+def test_poll_trader_mirror_exit_actually_closes_a_position(tmp_path):
+    conn = _make_db(tmp_path)
+    conn.execute(
+        """
+        INSERT INTO mandates (
+            address, version, verdict, confidence, issued_at, expires_at, reasoning
+        ) VALUES (?, 1, 'FOLLOW', 'HIGH', ?, ?, 'test mandate')
+        """,
+        (ADDRESS, datetime.now(timezone.utc).isoformat(), (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()),
+    )
+    now = _now_epoch()
+
+    entry_client = FakeClient([_trade_entry(tx_hash="0xa", ts=now - 10, side="BUY", size=10, price=0.5)])
+    poll_trader(conn, entry_client, _log(conn), ADDRESS, mode=MODE, mirror_config=MIRROR_CONFIG)
+    position = conn.execute("SELECT * FROM positions").fetchone()
+    assert position["status"] == "OPEN"
+
+    exit_client = FakeClient([_trade_entry(tx_hash="0xb", ts=now, side="SELL", size=10, price=0.6)])
+    poll_trader(conn, exit_client, _log(conn), ADDRESS, mode=MODE, mirror_config=MIRROR_CONFIG)
+
+    updated = conn.execute("SELECT * FROM positions WHERE id = ?", (position["id"],)).fetchone()
+    assert updated["status"] == "CLOSED"
+    assert updated["shares_open"] == pytest.approx(0.0)
+    exits = conn.execute("SELECT * FROM position_exits WHERE position_id = ?", (position["id"],)).fetchall()
+    assert len(exits) == 1

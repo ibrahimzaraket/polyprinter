@@ -21,6 +21,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from polyprinter.mirror import execute
 from polyprinter.mirror.decide import decide
 from polyprinter.mirror.position_model import TradeLeg, running_position
 from polyprinter.obs.log import Logger
@@ -233,7 +234,22 @@ def poll_trader(
         trade_row = _insert_observed_trade(conn, address, entry, position_after=position_after)
         decision = decide(conn, trade_row, mode=mode, mirror_config=mirror_config)
         latency_ms = int((datetime.now(timezone.utc) - detect_start).total_seconds() * 1000)
-        _insert_decision(conn, trade_row["id"], decision, mode=mode, latency_ms=latency_ms)
+        decision_id = _insert_decision(conn, trade_row["id"], decision, mode=mode, latency_ms=latency_ms)
+
+        # decide() only computes what SHOULD happen; execute.py is what
+        # actually books it — see that module's docstring for why this
+        # step used to not exist at all.
+        if decision["verdict"] == "TAKE":
+            execute.open_position(
+                conn, decision_id=decision_id, trade=trade_row, size_usd=decision["size_usd"], mode=mode
+            )
+        elif decision["verdict"] == "MIRROR_EXIT":
+            position = conn.execute(
+                "SELECT * FROM positions WHERE id = ?", (decision["position_id"],)
+            ).fetchone()
+            execute.record_exit(
+                conn, decision_id=decision_id, position=position, trade=trade_row, fraction=decision["fraction"]
+            )
 
         log.info(
             "mirror.decision",

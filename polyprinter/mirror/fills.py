@@ -13,10 +13,14 @@ an unverified client against a brand-new endpoint, with no reference fee
 model to check against, is exactly the kind of guess this project's own
 rules exist to prevent (CLAUDE.md: verify live, don't infer a shape).
 
-It's also genuinely inert either way: fills only apply to a TAKE, and no
-TAKE can happen until Phase 3 (Mandates) exists — see decide.py. So this
-is built and unit-tested as a pure function now, ready for whichever
-comes first: a live-verified CLOB client, or Phase 3 needing it wired up.
+Phase 3 (Mandates) is live now, though, and the moment it issues a real
+FOLLOW verdict a TAKE stops being hypothetical — see mirror/execute.py,
+which wires decide.py's verdicts into real `positions`/`position_exits`
+rows. It uses `approximate_fill()` below, not `walk_book()`, as its fill
+source: `walk_book()` is kept exactly as originally built, a pure function
+waiting for a real book snapshot, still with nothing feeding it. Swapping
+`approximate_fill` for `walk_book` in execute.py is the entire migration
+once a live-verified CLOB client exists — nothing else changes.
 """
 
 from __future__ import annotations
@@ -78,3 +82,30 @@ def walk_book(levels: list[BookLevel], size_usd: float, *, fee_bps: float = 200.
     avg_price = cost_usd / shares if shares else 0.0
     fee_usd = cost_usd * (fee_bps / 10_000.0)
     return Fill(shares=shares, avg_price=avg_price, cost_usd=cost_usd, fee_usd=fee_usd, total_usd=cost_usd + fee_usd)
+
+
+def approximate_fill(price: float, size_usd: float, *, fee_bps: float = 200.0) -> Fill:
+    """Stand-in for walk_book() until a live-verified order book exists —
+    see the module docstring. Assumes we fill at the trader's own observed
+    price with zero slippage, plus the same taker fee walk_book() charges.
+
+    That's optimistic: a real book walk would very likely show worse
+    execution than the price someone else already got. For a system whose
+    whole point is measuring whether copy tax is survivable (PRD §5), that's
+    the safer direction to be wrong in — it under-, not over-, states the
+    tax, so it can't manufacture a false kill signal. It's still a real
+    number to build positions/decisions bookkeeping against today, not a
+    silent no-op.
+
+    `price` must be > 0 (an observed_trades row's price always is, since
+    Polymarket prices are cents-on-the-dollar probabilities) and `size_usd`
+    must be positive — same contract as walk_book().
+    """
+    if price <= 0:
+        raise ValueError("price must be positive")
+    if size_usd <= 0:
+        raise ValueError("size_usd must be positive")
+
+    shares = size_usd / price
+    fee_usd = size_usd * (fee_bps / 10_000.0)
+    return Fill(shares=shares, avg_price=price, cost_usd=size_usd, fee_usd=fee_usd, total_usd=size_usd + fee_usd)
