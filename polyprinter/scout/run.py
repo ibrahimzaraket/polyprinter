@@ -1,9 +1,12 @@
 """Scout entrypoint. One call to `run_once()` = one full scan: discover
 candidates, fetch + compute a dossier per candidate, shrink ROI against the
-batch's population mean, write append-only trader_snapshots rows, then
-(Phase 3) issue a mandate for any watched trader whose dossier materially
-changed. Scout owns the `mandates` table (docs/SCHEMA.md invariant 5) —
-there is no separate mandate service, this is a step in Scout's own run.
+batch's population mean, write append-only trader_snapshots rows for
+whoever's lifetime-profitable or already being watched (scout/prune.py
+deletes everyone else's data — operator's explicit choice, see that
+module), then (Phase 3) issue a mandate for any watched trader whose
+dossier materially changed. Scout owns the `mandates` table (docs/SCHEMA.md
+invariant 5) — there is no separate mandate service, this is a step in
+Scout's own run.
 
 `main()` loops it daily when run as a service (`docker compose up scout`);
 `run_once()` alone is what tests and the seed script call.
@@ -25,6 +28,7 @@ from polyprinter.obs import heartbeat
 from polyprinter.obs.log import Logger
 from polyprinter.scout.discover import discover_candidates, upsert_traders
 from polyprinter.scout.dossier import compute_dossier
+from polyprinter.scout import prune
 from polyprinter.scout.shrinkage import population_mean, shrink
 from polyprinter.sources.openrouter import OpenRouterClient
 from polyprinter.sources.polymarket_data import PolymarketDataClient
@@ -168,11 +172,25 @@ def run_once(
                 heartbeat.beat(conn, SERVICE, phase="dossier", done=i + 1, total=len(candidates))
                 conn.commit()
 
+    # Population mean is computed from THIS run's freshly-fetched dossiers,
+    # not from stored trader_snapshots history — so pruning unprofitable
+    # candidates below (which only ever touches *storage*) can't bias this
+    # against FR-2's own anti-selection-bias intent: every candidate this
+    # run discovered, profitable or not, still counts here.
     rois = [m.roi_raw for m in dossiers if m.roi_raw is not None]
     pop_mean = population_mean(rois)
     log.info("shrinkage.population_mean", pop_mean=pop_mean, n=len(rois))
 
+    n_purged = 0
     for m in dossiers:
+        if not prune.is_lifetime_profitable(m.realised_pnl_usd) and not prune.has_been_acted_upon(conn, m.address):
+            # Never watched/mandated and not lifetime-profitable — nothing
+            # here is worth keeping. See scout/prune.py for the full
+            # rationale and the audit-history guard this respects.
+            prune.purge_trader(conn, m.address)
+            n_purged += 1
+            continue
+
         roi_shrunk = None
         if m.roi_raw is not None:
             roi_shrunk = shrink(m.resolved_positions, m.roi_raw, pop_mean, k=SHRINKAGE_K)
@@ -185,8 +203,9 @@ def run_once(
 
     n_mandates = _issue_mandates_for_watchlist(conn, log, watchlist_limit=mandate_watchlist_limit)
 
-    log.info("run.done", n_snapshotted=len(dossiers), n_mandates_issued=n_mandates)
-    return len(dossiers)
+    n_kept = len(dossiers) - n_purged
+    log.info("run.done", n_snapshotted=n_kept, n_purged_unprofitable=n_purged, n_mandates_issued=n_mandates)
+    return n_kept
 
 
 def main() -> None:
