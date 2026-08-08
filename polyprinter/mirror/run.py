@@ -9,10 +9,13 @@ CLI surface — so the two services read as one system, not two styles.
 
 Phase 4's on-chain watcher (watch_events.py) runs as a second step in the
 same tick, gated on POLYGON_RPC_URL being set — same opt-in-by-env-presence
-pattern Phase 3's mandate issuance already uses for OPENROUTER_API_KEY.
-It does NOT drive real decisions (see watch_events.py's module docstring);
-polling stays the only path that calls decide()/execute() until the diff
-harness proves the two agree.
+pattern Phase 3's mandate issuance already uses for OPENROUTER_API_KEY. It
+drives real decisions ONLY for fast-laned addresses (mirror/fast_lane.py —
+pinned and holding an active operator mandate with fast_lane=1); everyone
+else stays log-only until the diff harness proves polling and events
+agree. watch_poll.run_once checks the identical fast-lane set and skips
+decide()/execute() for exactly those addresses, so the two never act on
+the same trade twice — see both modules' own docstrings.
 """
 
 from __future__ import annotations
@@ -23,7 +26,7 @@ import time
 
 from polyprinter.config import load_config
 from polyprinter.db.conn import get_connection
-from polyprinter.mirror import watch_events
+from polyprinter.mirror import fast_lane, watch_events
 from polyprinter.mirror.watch_poll import run_once, select_watchlist
 from polyprinter.obs import heartbeat
 from polyprinter.obs.log import Logger
@@ -74,7 +77,11 @@ def main() -> None:
         if rpc_url:
             try:
                 watchlist = select_watchlist(conn, mirror_config["watchlist_size"])
-                watch_events.run_once(conn, log, rpc_url=rpc_url, watchlist=watchlist)
+                fast_laned = frozenset(fast_lane.fast_lane_addresses(conn))
+                watch_events.run_once(
+                    conn, log, rpc_url=rpc_url, watchlist=watchlist,
+                    fast_laned=fast_laned, mode=mode, mirror_config=mirror_config,
+                )
             except Exception as exc:  # noqa: BLE001 — an RPC hiccup costs one cycle, not the whole tick
                 log.error("mirror.chain.run.failed", error=str(exc))
 

@@ -126,3 +126,25 @@ class PolymarketDataClient:
         return self._get(
             "/trades", {"user": user, "limit": limit, "offset": offset, "start": start, "end": end}
         )
+
+    def value(self, user: str) -> float | None:
+        """GET /value — current portfolio value in USD. Verified live
+        2026-08-08: matches sum(positions[i].currentValue) to within
+        ~0.06% (the gap is just timing skew between two separate calls on
+        fast-moving 5-minute crypto markets), and every wallet checked had
+        $0 raw on-chain USDC.e balance — active traders keep ~zero idle
+        cash, so this endpoint alone (not a wallet balance lookup, which
+        would've meant a whole new on-chain capability for no benefit) is
+        the right proxy for "their current bankroll" that mirror/sizing.py
+        needs for balance-matched sizing (mandate/operator.py).
+
+        Returns None if the response shape is unexpected (no rows) rather
+        than 0 — callers must treat a genuine $0 balance (a real, common
+        state for an active trader mid-rotation) differently from "we
+        don't actually know," and 0 is a valid float that would otherwise
+        be indistinguishable from "no data".
+        """
+        rows = self._get("/value", {"user": user})
+        if not rows or "value" not in rows[0]:
+            return None
+        return rows[0]["value"]

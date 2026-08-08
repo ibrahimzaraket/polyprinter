@@ -36,6 +36,24 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _pinned_addresses() -> list[str]:
+    """De-duplicated, lowercased, order-preserved read of
+    mirror.pinned_addresses — the one place this gets parsed out of
+    config, shared by select_watchlist, ensure_pinned_traders_exist, and
+    mirror/fast_lane.py so there's never a second, independently-parsed
+    copy of "who's pinned" to drift out of sync with this one.
+    """
+    config = load_config()
+    # `or []`, not `.get(..., [])` — a YAML key present with nothing under
+    # it (`pinned_addresses:` with no list items) parses to None, not a
+    # missing key, so the dict .get() default never kicks in. Found live
+    # by a test using exactly that shape; without this, a config-overrides.yaml
+    # left in that state would crash every Scout/Mirror cycle, not just
+    # return an empty pin list.
+    raw = config.get("mirror", {}).get("pinned_addresses") or []
+    return list(dict.fromkeys(a.lower() for a in raw if a))
+
+
 def select_watchlist(conn: sqlite3.Connection, n: int) -> list[str]:
     """Pinned traders (config.yaml/config-overrides.yaml's
     `mirror.pinned_addresses` — operator's explicit choice to tail
@@ -55,8 +73,7 @@ def select_watchlist(conn: sqlite3.Connection, n: int) -> list[str]:
     ensure_pinned_traders_exist(), which is the write-side counterpart
     callers that actually poll/mandate must call first).
     """
-    config = load_config()
-    pinned = list(dict.fromkeys(a.lower() for a in config.get("mirror", {}).get("pinned_addresses", []) if a))
+    pinned = _pinned_addresses()
 
     auto_slots = max(n - len(pinned), 0)
     auto: list[str] = []
@@ -100,8 +117,7 @@ def ensure_pinned_traders_exist(conn: sqlite3.Connection) -> None:
     trader. Idempotent (ON CONFLICT DO NOTHING) — safe to call every cycle
     from both mirror/run.py and scout/run.py, whichever runs first.
     """
-    config = load_config()
-    pinned = [a.lower() for a in config.get("mirror", {}).get("pinned_addresses", []) if a]
+    pinned = _pinned_addresses()
     now = datetime.now(timezone.utc).isoformat()
     for address in pinned:
         conn.execute(
@@ -243,6 +259,21 @@ def _insert_decision(conn: sqlite3.Connection, observed_trade_id: int, decision:
     return cur.lastrowid
 
 
+def _needs_balance_lookup(conn: sqlite3.Connection, address: str) -> bool:
+    """True if `address` has an active balance_matched mandate — the only
+    case decide_entry() actually consults their_balance_usd for. Checked
+    before calling client.value() so the other ~all trades (fixed_cap
+    LLM/operator mandates, or none at all) never pay for an API call they
+    don't need.
+    """
+    row = conn.execute(
+        "SELECT 1 FROM mandates WHERE address = ? AND superseded_by IS NULL "
+        "AND sizing_mode = 'balance_matched' AND expires_at > datetime('now') LIMIT 1",
+        (address,),
+    ).fetchone()
+    return row is not None
+
+
 def poll_trader(
     conn: sqlite3.Connection,
     client: PolymarketDataClient,
@@ -251,9 +282,18 @@ def poll_trader(
     *,
     mode: str,
     mirror_config: dict,
+    fast_laned: frozenset[str] = frozenset(),
 ) -> int:
     """Poll one trader, ingest any new trades, write a decision for each.
     Returns the number of new decisions written.
+
+    `fast_laned` (mirror/fast_lane.py's single source of truth, computed
+    once per run_once() cycle, not per trader) — for an address in this
+    set, watch_events.py is the one actually deciding/executing; polling
+    still records the observed_trades row (keeps the poll cursor correct,
+    keeps a redundant audit trail) but writes a SKIP decision instead of
+    calling decide()/execute() itself, so the trade is never acted on
+    twice.
     """
     since = _last_seen_epoch(conn, address)
     if since is None:
@@ -287,7 +327,22 @@ def poll_trader(
         position_after = position_before + entry["size"] if entry["side"] == "BUY" else position_before - entry["size"]
 
         trade_row = _insert_observed_trade(conn, address, entry, position_after=position_after)
-        decision = decide(conn, trade_row, mode=mode, mirror_config=mirror_config)
+
+        if address in fast_laned:
+            decision = {
+                "verdict": "SKIP",
+                "skip_reason_code": "FAST_LANE_HANDLED_BY_CHAIN",
+                "skip_reason_text": "This address is fast-laned — watch_events.py (on-chain) drives its decisions, not polling.",
+                "size_usd": None,
+                "mandate_id": None,
+            }
+        else:
+            their_balance_usd = None
+            if entry["side"] == "BUY" and _needs_balance_lookup(conn, address):
+                their_balance_usd = client.value(address)
+            decision = decide(
+                conn, trade_row, mode=mode, mirror_config=mirror_config, their_balance_usd=their_balance_usd
+            )
         latency_ms = int((datetime.now(timezone.utc) - detect_start).total_seconds() * 1000)
         decision_id = _insert_decision(conn, trade_row["id"], decision, mode=mode, latency_ms=latency_ms)
 
@@ -319,15 +374,20 @@ def poll_trader(
 
 
 def run_once(conn: sqlite3.Connection, log: Logger, *, mode: str, mirror_config: dict) -> int:
+    from polyprinter.mirror import fast_lane  # local import: fast_lane imports this module (watch_poll)
+
     ensure_pinned_traders_exist(conn)
     watchlist = select_watchlist(conn, mirror_config["watchlist_size"])
-    log.info("mirror.watchlist", n=len(watchlist))
+    fast_laned = frozenset(fast_lane.fast_lane_addresses(conn))
+    log.info("mirror.watchlist", n=len(watchlist), n_fast_laned=len(fast_laned))
 
     total_new = 0
     with PolymarketDataClient(conn) as client:
         for address in watchlist:
             try:
-                total_new += poll_trader(conn, client, log, address, mode=mode, mirror_config=mirror_config)
+                total_new += poll_trader(
+                    conn, client, log, address, mode=mode, mirror_config=mirror_config, fast_laned=fast_laned
+                )
             except Exception as exc:  # noqa: BLE001 — one bad trader must not kill the cycle
                 log.error("mirror.poll_trader.failed", address=address, error=str(exc))
 

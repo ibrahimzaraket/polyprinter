@@ -5,6 +5,8 @@ than mocked.
 
 from datetime import datetime, timezone
 
+import pytest
+
 from polyprinter.db.conn import get_connection
 from polyprinter.mirror import sizing
 
@@ -108,3 +110,40 @@ def test_per_trade_cap_no_mandate_ceiling():
 def test_per_trade_cap_clamps_to_mandate_ceiling():
     assert sizing.per_trade_cap(75.0, 50.0) == 50.0
     assert sizing.per_trade_cap(30.0, 50.0) == 30.0
+
+
+def test_balance_matched_size_exact_match_at_multiplier_1():
+    # they put 5% of their $10k balance into a trade; we mirror 5% of our
+    # $1000 balance at multiplier 1.0
+    size = sizing.balance_matched_size(
+        their_trade_usd=500.0, their_balance_usd=10_000.0, our_balance_usd=1000.0, multiplier=1.0
+    )
+    assert size == pytest.approx(50.0)
+
+
+def test_balance_matched_size_scales_with_multiplier():
+    size = sizing.balance_matched_size(
+        their_trade_usd=500.0, their_balance_usd=10_000.0, our_balance_usd=1000.0, multiplier=0.5
+    )
+    assert size == pytest.approx(25.0)
+
+
+def test_balance_matched_size_none_when_balance_unknown():
+    assert sizing.balance_matched_size(
+        their_trade_usd=500.0, their_balance_usd=None, our_balance_usd=1000.0, multiplier=1.0
+    ) is None
+
+
+def test_balance_matched_size_none_when_balance_zero_or_negative():
+    assert sizing.balance_matched_size(
+        their_trade_usd=500.0, their_balance_usd=0.0, our_balance_usd=1000.0, multiplier=1.0
+    ) is None
+    assert sizing.balance_matched_size(
+        their_trade_usd=500.0, their_balance_usd=-10.0, our_balance_usd=1000.0, multiplier=1.0
+    ) is None
+
+
+def test_balance_matched_size_none_when_trade_non_positive():
+    assert sizing.balance_matched_size(
+        their_trade_usd=0.0, their_balance_usd=10_000.0, our_balance_usd=1000.0, multiplier=1.0
+    ) is None

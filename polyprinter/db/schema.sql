@@ -98,6 +98,12 @@ CREATE TABLE mandates (
     expires_at               TEXT NOT NULL,
     superseded_by           INTEGER REFERENCES mandates(id),
     UNIQUE (address, version)
+
+    -- issued_by, sizing_mode, size_multiplier, fast_lane are added by
+    -- migrations/0004_operator_mandates.sql, not here — same reason as
+    -- 0002/0003's own columns: schema.sql is only ever replayed as
+    -- migration 1, so a column added here would collide with 0004's
+    -- ALTER TABLE on a fresh install.
 );
 CREATE INDEX idx_mandate_active ON mandates(address, expires_at)
     WHERE superseded_by IS NULL;
@@ -135,7 +141,8 @@ CREATE TABLE decisions (
                                         -- | 'CATEGORY_BLOCKED' | 'PRICE_BAND'
                                         -- | 'LIQUIDITY' | 'PORTFOLIO_CAP'
                                         -- | 'CORRELATION_CAP' | 'NO_CAPITAL'
-                                        -- | 'NO_MATCHING_POSITION'
+                                        -- | 'NO_MATCHING_POSITION' | 'NO_BALANCE_DATA'
+                                        -- | 'FAST_LANE_HANDLED_BY_CHAIN'
     skip_reason_text   TEXT,
     size_usd           REAL,
     mode               TEXT NOT NULL,   -- 'paper' | 'live' | 'shadow'

@@ -65,6 +65,8 @@ def _insert_mandate(conn, **overrides):
         reasoning="test mandate",
         issued_at=_iso(_now() - timedelta(hours=1)),
         expires_at=_iso(_now() + timedelta(days=1)),
+        sizing_mode="fixed_cap",
+        size_multiplier=None,
     )
     defaults.update(overrides)
     conn.execute(
@@ -72,10 +74,10 @@ def _insert_mandate(conn, **overrides):
         INSERT INTO mandates (
             address, version, verdict, confidence, max_position_usd,
             min_entry_price, max_entry_price, min_market_liquidity,
-            reasoning, issued_at, expires_at
+            reasoning, issued_at, expires_at, sizing_mode, size_multiplier
         ) VALUES (:address, :version, :verdict, :confidence, :max_position_usd,
                    :min_entry_price, :max_entry_price, :min_market_liquidity,
-                   :reasoning, :issued_at, :expires_at)
+                   :reasoning, :issued_at, :expires_at, :sizing_mode, :size_multiplier)
         """,
         defaults,
     )
@@ -152,6 +154,52 @@ def test_entry_exceeding_bankroll_is_skipped(tmp_path):
     result = decide(conn, trade, mode=MODE, mirror_config=tiny_config)
     assert result["verdict"] == "SKIP"
     assert result["skip_reason_code"] == "NO_CAPITAL"
+
+
+def test_entry_balance_matched_sizes_proportionally(tmp_path):
+    conn = _make_db(tmp_path)
+    _insert_mandate(conn, sizing_mode="balance_matched", size_multiplier=1.0, max_position_usd=None)
+    trade = _insert_trade(conn, shares=10, price=0.5)  # $5 requested (irrelevant to balance-matched sizing)
+
+    result = decide(
+        conn, trade, mode=MODE, mirror_config=MIRROR_CONFIG, their_balance_usd=10_000.0
+    )
+
+    # their $5 trade / their $10,000 balance = 0.05% -> 0.05% of our $1000 bankroll = $0.50
+    assert result["verdict"] == "TAKE"
+    assert result["size_usd"] == pytest.approx(0.5)
+
+
+def test_entry_balance_matched_scales_with_multiplier(tmp_path):
+    conn = _make_db(tmp_path)
+    _insert_mandate(conn, sizing_mode="balance_matched", size_multiplier=2.0, max_position_usd=None)
+    trade = _insert_trade(conn, shares=10, price=0.5)
+
+    result = decide(conn, trade, mode=MODE, mirror_config=MIRROR_CONFIG, their_balance_usd=10_000.0)
+
+    assert result["size_usd"] == pytest.approx(1.0)  # double the 1.0x case above
+
+
+def test_entry_balance_matched_skips_without_balance_data(tmp_path):
+    conn = _make_db(tmp_path)
+    _insert_mandate(conn, sizing_mode="balance_matched", size_multiplier=1.0)
+    trade = _insert_trade(conn, shares=10, price=0.5)
+
+    result = decide(conn, trade, mode=MODE, mirror_config=MIRROR_CONFIG, their_balance_usd=None)
+
+    assert result["verdict"] == "SKIP"
+    assert result["skip_reason_code"] == "NO_BALANCE_DATA"
+
+
+def test_entry_balance_matched_still_respects_mandate_max_position(tmp_path):
+    conn = _make_db(tmp_path)
+    _insert_mandate(conn, sizing_mode="balance_matched", size_multiplier=1.0, max_position_usd=0.1)
+    trade = _insert_trade(conn, shares=10, price=0.5)
+
+    result = decide(conn, trade, mode=MODE, mirror_config=MIRROR_CONFIG, their_balance_usd=10_000.0)
+
+    assert result["verdict"] == "TAKE"
+    assert result["size_usd"] == pytest.approx(0.1)  # $0.50 matched, clamped to the $0.10 mandate cap
 
 
 def test_exit_with_no_matching_position_is_skipped(tmp_path):

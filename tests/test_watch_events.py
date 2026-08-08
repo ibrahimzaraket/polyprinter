@@ -96,3 +96,119 @@ def test_no_new_confirmed_blocks_is_a_noop(tmp_path):
 
     assert n == 0
     assert client2.get_logs_calls == []
+
+
+class FakeDataClient:
+    """Stands in for PolymarketDataClient — only the two methods
+    _handle_fast_lane_fill actually calls.
+    """
+
+    def __init__(self, *, activity_entries: list[dict] | None = None, value: float | None = None):
+        self._activity_entries = activity_entries or []
+        self._value = value
+
+    def activity(self, user, *, limit=25, start=None, types=None):
+        return list(self._activity_entries)
+
+    def value(self, user):
+        return self._value
+
+
+def _make_db_with_trader_and_mandate(tmp_path, *, sizing_mode="fixed_cap", size_multiplier=None):
+    conn = get_connection(tmp_path / "test.db")
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO traders (address, first_seen, discovery_source) VALUES (?, ?, 'lb_day')",
+        (ADDRESS, now),
+    )
+    conn.execute(
+        """
+        INSERT INTO mandates (
+            address, version, verdict, confidence, issued_at, expires_at, reasoning,
+            issued_by, sizing_mode, size_multiplier, fast_lane
+        ) VALUES (?, 1, 'FOLLOW', 'HIGH', ?, '2030-01-01T00:00:00+00:00', 'test', 'operator', ?, ?, 1)
+        """,
+        (ADDRESS, now, sizing_mode, size_multiplier),
+    )
+    return conn
+
+
+MIRROR_CONFIG = {
+    "watchlist_size": 20,
+    "paper_bankroll_usd": 1000,
+    "portfolio_exposure_cap_usd": 500,
+    "correlation_cap_usd": 150,
+}
+
+
+def test_fast_lane_fill_opens_a_real_position(tmp_path):
+    conn = _make_db_with_trader_and_mandate(tmp_path)
+    client = FakeChainClient(latest=1000, logs=[BUY_LOG])
+    data_client = FakeDataClient(activity_entries=[{"transactionHash": BUY_LOG["transactionHash"], "conditionId": "0xcond1"}])
+
+    watch_events.process_range(
+        conn, _log(conn), client, watchlist=[ADDRESS], confirmations=5,
+        fast_laned=frozenset({ADDRESS}), data_client=data_client, mode="paper", mirror_config=MIRROR_CONFIG,
+    )
+
+    observed = conn.execute("SELECT * FROM observed_trades WHERE address = ?", (ADDRESS,)).fetchall()
+    assert len(observed) == 1
+    assert observed[0]["source"] == "event"
+    decisions = conn.execute("SELECT * FROM decisions").fetchall()
+    assert len(decisions) == 1
+    assert decisions[0]["verdict"] == "TAKE"
+    positions = conn.execute("SELECT * FROM positions").fetchall()
+    assert len(positions) == 1
+    assert positions[0]["market_id"] == "0xcond1"
+
+
+def test_non_fast_lane_fill_is_not_acted_on(tmp_path):
+    conn = _make_db_with_trader_and_mandate(tmp_path)
+    client = FakeChainClient(latest=1000, logs=[BUY_LOG])
+    data_client = FakeDataClient()
+
+    n = watch_events.process_range(
+        conn, _log(conn), client, watchlist=[ADDRESS], confirmations=5,
+        fast_laned=frozenset(), data_client=data_client, mode="paper", mirror_config=MIRROR_CONFIG,
+    )
+
+    assert n == 1  # still detected/logged
+    assert conn.execute("SELECT COUNT(*) AS n FROM observed_trades").fetchone()["n"] == 0
+    assert conn.execute("SELECT COUNT(*) AS n FROM decisions").fetchone()["n"] == 0
+
+
+def test_fast_lane_fill_with_unresolvable_market_id_is_skipped_not_crashed(tmp_path):
+    conn = _make_db_with_trader_and_mandate(tmp_path)
+    client = FakeChainClient(latest=1000, logs=[BUY_LOG])
+    data_client = FakeDataClient(activity_entries=[])  # no matching tx_hash -> market_id never resolves
+
+    n = watch_events.process_range(
+        conn, _log(conn), client, watchlist=[ADDRESS], confirmations=5,
+        fast_laned=frozenset({ADDRESS}), data_client=data_client, mode="paper", mirror_config=MIRROR_CONFIG,
+    )
+
+    assert n == 1  # detection still logged
+    assert conn.execute("SELECT COUNT(*) AS n FROM observed_trades").fetchone()["n"] == 0
+    assert conn.execute("SELECT COUNT(*) AS n FROM decisions").fetchone()["n"] == 0
+
+
+def test_fast_lane_fill_is_idempotent_on_rerun(tmp_path):
+    conn = _make_db_with_trader_and_mandate(tmp_path)
+    data_client = FakeDataClient(activity_entries=[{"transactionHash": BUY_LOG["transactionHash"], "conditionId": "0xcond1"}])
+
+    client1 = FakeChainClient(latest=1000, logs=[BUY_LOG])
+    watch_events.process_range(
+        conn, _log(conn), client1, watchlist=[ADDRESS], confirmations=5,
+        fast_laned=frozenset({ADDRESS}), data_client=data_client, mode="paper", mirror_config=MIRROR_CONFIG,
+    )
+    # A later cycle (checkpoint has genuinely advanced, a new block range
+    # gets fetched) whose provider happens to re-serve the exact same fill
+    # — must not double-act, same guard as a poll-window overlap.
+    client2 = FakeChainClient(latest=1010, logs=[BUY_LOG])
+    watch_events.process_range(
+        conn, _log(conn), client2, watchlist=[ADDRESS], confirmations=5,
+        fast_laned=frozenset({ADDRESS}), data_client=data_client, mode="paper", mirror_config=MIRROR_CONFIG,
+    )
+
+    assert conn.execute("SELECT COUNT(*) AS n FROM observed_trades").fetchone()["n"] == 1
+    assert conn.execute("SELECT COUNT(*) AS n FROM positions").fetchone()["n"] == 1

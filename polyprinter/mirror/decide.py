@@ -87,7 +87,22 @@ def _skip(code: str, text: str, *, mandate_id: int | None = None) -> dict[str, A
     }
 
 
-def decide_entry(conn: sqlite3.Connection, trade: sqlite3.Row, *, mode: str, mirror_config: dict) -> dict[str, Any]:
+def decide_entry(
+    conn: sqlite3.Connection,
+    trade: sqlite3.Row,
+    *,
+    mode: str,
+    mirror_config: dict,
+    their_balance_usd: float | None = None,
+) -> dict[str, Any]:
+    """`their_balance_usd` is only consulted when the active mandate's
+    sizing_mode is 'balance_matched' (mandate/operator.py) — the caller
+    (watch_poll.py/watch_events.py) fetches it via
+    PolymarketDataClient.value() only for a trader who actually has such
+    a mandate, so this function itself stays a pure DB read with no
+    network dependency of its own; every other mandate keeps sizing
+    exactly as before regardless of what's passed here.
+    """
     mandate = _lookup_active_mandate(conn, trade["address"])
     if mandate is None:
         return _skip("NO_MANDATE", "No mandate has ever been issued for this trader (Mandates ship in Phase 3).")
@@ -121,9 +136,30 @@ def decide_entry(conn: sqlite3.Connection, trade: sqlite3.Row, *, mode: str, mir
         )
 
     requested_usd = trade["shares"] * price
-    size_usd = sizing.per_trade_cap(requested_usd, mandate["max_position_usd"])
-
     bankroll = mirror_config["paper_bankroll_usd"]
+
+    if mandate["sizing_mode"] == "balance_matched":
+        # Our own total bankroll (free capital + whatever's already
+        # deployed) — the same balance concept their side's
+        # PolymarketDataClient.value() represents, so the ratio compares
+        # like with like.
+        our_balance = bankroll
+        matched = sizing.balance_matched_size(
+            their_trade_usd=requested_usd,
+            their_balance_usd=their_balance_usd,
+            our_balance_usd=our_balance,
+            multiplier=mandate["size_multiplier"] or 1.0,
+        )
+        if matched is None:
+            return _skip(
+                "NO_BALANCE_DATA",
+                "Mandate is balance-matched but their current portfolio value is unknown or zero — can't size proportionally.",
+                mandate_id=mandate["id"],
+            )
+        size_usd = sizing.per_trade_cap(matched, mandate["max_position_usd"])
+    else:
+        size_usd = sizing.per_trade_cap(requested_usd, mandate["max_position_usd"])
+
     if sizing.available_capital_usd(conn, mode, bankroll) < size_usd:
         return _skip(
             "NO_CAPITAL",
@@ -185,11 +221,18 @@ def decide_exit(conn: sqlite3.Connection, trade: sqlite3.Row, *, mode: str) -> d
     }
 
 
-def decide(conn: sqlite3.Connection, trade: sqlite3.Row, *, mode: str, mirror_config: dict) -> dict[str, Any]:
+def decide(
+    conn: sqlite3.Connection,
+    trade: sqlite3.Row,
+    *,
+    mode: str,
+    mirror_config: dict,
+    their_balance_usd: float | None = None,
+) -> dict[str, Any]:
     """trade: an already-inserted observed_trades row (must have an id —
     decide_exit needs it to look at what came before)."""
     if trade["side"] in ENTRY_SIDES:
-        return decide_entry(conn, trade, mode=mode, mirror_config=mirror_config)
+        return decide_entry(conn, trade, mode=mode, mirror_config=mirror_config, their_balance_usd=their_balance_usd)
     if trade["side"] in EXIT_SIDES:
         return decide_exit(conn, trade, mode=mode)
     return _skip("UNKNOWN_SIDE", f"observed side {trade['side']!r} is neither BUY nor SELL.")

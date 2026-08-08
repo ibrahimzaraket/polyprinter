@@ -79,3 +79,32 @@ def available_capital_usd(conn: sqlite3.Connection, mode: str, bankroll_usd: flo
     in a 6-month market isn't available for the next trade.
     """
     return bankroll_usd - portfolio_exposure_usd(conn, mode)
+
+
+def balance_matched_size(
+    *, their_trade_usd: float, their_balance_usd: float | None, our_balance_usd: float, multiplier: float
+) -> float | None:
+    """Operator mandates' sizing_mode='balance_matched' (mandate/operator.py):
+    if they put X% of their current portfolio value into this trade, we put
+    X% of ours in too, scaled by an operator-editable multiplier (1.0 =
+    exact proportional match; 0.5 = mirror at half conviction; 2.0 =
+    amplify). `their_balance_usd` comes from PolymarketDataClient.value()
+    (verified live 2026-08-08 to track their real current portfolio value,
+    not raw on-chain USDC balance — active traders keep ~zero idle cash,
+    so a wallet-balance lookup would be worthless here; see that method's
+    own docstring).
+
+    Returns None — not 0, not a fallback guess — when there isn't enough
+    to compute a meaningful ratio from: no balance data, a non-positive
+    balance, or a non-positive trade. A caller silently sizing $0 or
+    falling back to some other cap would hide that this specific mandate
+    mode couldn't actually be honored for this trade; None makes that an
+    explicit, checkable case (same discipline as fraction_of() in
+    position_model.py returning None rather than guessing).
+    """
+    if their_balance_usd is None or their_balance_usd <= 0:
+        return None
+    if their_trade_usd <= 0:
+        return None
+    their_pct = their_trade_usd / their_balance_usd
+    return their_pct * our_balance_usd * multiplier
