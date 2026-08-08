@@ -65,6 +65,12 @@ CREATE TABLE trader_snapshots (
     trades_7d             INTEGER,
     trades_30d             INTEGER,
     open_positions         INTEGER
+
+    -- realised_pnl_24h_usd, realised_pnl_7d_usd, strategy_summary are
+    -- added by migrations/0003_trader_snapshots_extensions.sql, not here
+    -- — see migrations/0002's own comment on raw_responses.body_hash for
+    -- why: schema.sql is only ever replayed as migration 1, so a column
+    -- added here would collide with 0003's ALTER TABLE on a fresh install.
 );
 CREATE INDEX idx_snap_addr_time ON trader_snapshots(address, scanned_at DESC);
 

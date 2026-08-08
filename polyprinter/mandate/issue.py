@@ -42,9 +42,17 @@ def _now_iso() -> str:
     return _now().isoformat()
 
 
-def today_llm_spend_usd(conn: sqlite3.Connection) -> float:
+def today_llm_spend_usd(conn: sqlite3.Connection, purpose: str = PURPOSE) -> float:
+    """Purpose-scoped, not a blanket sum across all llm_calls — mandate
+    issuance and strategy narration (scout/strategy.py, added 2026-08-08)
+    are different LLM call types with their own separate daily budgets
+    (config.yaml's `mandate:` vs `strategy:`); summing them together would
+    let one starve the other's budget on a busy day. Defaults to this
+    module's own PURPOSE so existing callers/tests are unaffected.
+    """
     row = conn.execute(
-        "SELECT COALESCE(SUM(cost_usd), 0) AS total FROM llm_calls WHERE date(called_at) = date('now')"
+        "SELECT COALESCE(SUM(cost_usd), 0) AS total FROM llm_calls WHERE purpose = ? AND date(called_at) = date('now')",
+        (purpose,),
     ).fetchone()
     return row["total"]
 

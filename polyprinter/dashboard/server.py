@@ -12,7 +12,9 @@ from datetime import datetime, timezone
 
 from flask import Flask, abort, g, render_template
 
+from polyprinter.config import load_config
 from polyprinter.db.conn import get_connection
+from polyprinter.mirror.watch_poll import select_watchlist
 from polyprinter.obs import heartbeat
 
 SERVICE = "dashboard"
@@ -312,11 +314,22 @@ def now() -> str:
     )
 
 
+def _current_watchlist(conn: sqlite3.Connection) -> set[str]:
+    """Who Mirror is tailing right now — a pure read (select_watchlist
+    itself never writes; see mirror/watch_poll.py), so safe to call from
+    the read-only dashboard. Used to render the "Tailed" badge on
+    /traders and /traders/<address>.
+    """
+    watchlist_size = load_config().get("mirror", {}).get("watchlist_size", 20)
+    return set(select_watchlist(conn, watchlist_size))
+
+
 @app.route("/traders")
 def traders() -> str:
     conn = get_db()
     rows = _latest_snapshot_per_trader(conn)
-    return render_template("traders.html", rows=rows, active_tab="traders")
+    watchlist = _current_watchlist(conn)
+    return render_template("traders.html", rows=rows, watchlist=watchlist, active_tab="traders")
 
 
 @app.route("/traders/<address>")
@@ -356,6 +369,7 @@ def trader_detail(address: str) -> str:
 
     recent_trades = _recent_trades(conn, address)
     pnl_by_market = _pnl_by_market(conn, address)
+    is_tailed = address in _current_watchlist(conn)
 
     return render_template(
         "trader_detail.html",
@@ -367,6 +381,7 @@ def trader_detail(address: str) -> str:
         recent_trades=recent_trades,
         pnl_by_market=pnl_by_market,
         active_mandate=active_mandate,
+        is_tailed=is_tailed,
         active_tab="traders",
     )
 

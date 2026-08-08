@@ -17,6 +17,10 @@
   <tr>
     <th>#</th>
     <th>Trader</th>
+    <th>Tailed</th>
+    <th class="num sortable" data-key="pnl_24h">P&amp;L 24h<span class="arrow">&#9662;</span></th>
+    <th class="num sortable" data-key="pnl_7d">P&amp;L 7d<span class="arrow">&#9662;</span></th>
+    <th class="num sortable" data-key="pnl_lifetime">P&amp;L lifetime<span class="arrow">&#9662;</span></th>
     <th class="num sortable" data-key="roi_shrunk">ROI (shrunk) <a class="hint" href="/definitions#shrinkage" title="What is shrinkage?">?</a><span class="arrow">&#9662;</span></th>
     <th class="num sortable" data-key="roi_raw">ROI (raw)<span class="arrow">&#9662;</span></th>
     <th class="num sortable" data-key="resolved_positions">Resolved pos.<span class="arrow">&#9662;</span></th>
@@ -24,7 +28,7 @@
     <th class="num sortable" data-key="hold_to_resolution_rate">Hold-to-resolution <a class="hint" href="/definitions#hold-to-resolution" title="Why this matters">?</a><span class="arrow">&#9662;</span></th>
     <th class="num sortable" data-key="trades_30d">Trades 30d<span class="arrow">&#9662;</span></th>
     <th>Active</th>
-    <th>Source</th>
+    <th>Strategy</th>
   </tr>
   </thead>
   <tbody>
@@ -36,9 +40,16 @@
       data-resolved_positions="{{ r['resolved_positions'] if r['resolved_positions'] is not none else '' }}"
       data-win_rate="{{ r['win_rate'] if r['win_rate'] is not none else '' }}"
       data-hold_to_resolution_rate="{{ r['hold_to_resolution_rate'] if r['hold_to_resolution_rate'] is not none else '' }}"
-      data-trades_30d="{{ r['trades_30d'] if r['trades_30d'] is not none else '' }}">
+      data-trades_30d="{{ r['trades_30d'] if r['trades_30d'] is not none else '' }}"
+      data-pnl_24h="{{ r['realised_pnl_24h_usd'] if r['realised_pnl_24h_usd'] is not none else '' }}"
+      data-pnl_7d="{{ r['realised_pnl_7d_usd'] if r['realised_pnl_7d_usd'] is not none else '' }}"
+      data-pnl_lifetime="{{ r['realised_pnl_usd'] if r['realised_pnl_usd'] is not none else '' }}">
     <td class="rank-cell {{ 'top' if loop.index <= 3 }}">{{ loop.index }}</td>
     <td><a href="/traders/{{ r['address'] }}">{{ r['alias'] or r['address'][:10] + '…' }}</a></td>
+    <td>{% if r['address'] in watchlist %}<span class="badge badge-good" title="Currently watched by Mirror — every trade they make gets a decision">&#128065; Tailed</span>{% else %}<span class="badge badge-neutral">—</span>{% endif %}</td>
+    <td class="num {{ 'pnl-pos' if r['realised_pnl_24h_usd'] and r['realised_pnl_24h_usd'] > 0 else 'pnl-neg' if r['realised_pnl_24h_usd'] and r['realised_pnl_24h_usd'] < 0 }}">{{ '$%.0f' % r['realised_pnl_24h_usd'] if r['realised_pnl_24h_usd'] is not none else '—' }}</td>
+    <td class="num {{ 'pnl-pos' if r['realised_pnl_7d_usd'] and r['realised_pnl_7d_usd'] > 0 else 'pnl-neg' if r['realised_pnl_7d_usd'] and r['realised_pnl_7d_usd'] < 0 }}">{{ '$%.0f' % r['realised_pnl_7d_usd'] if r['realised_pnl_7d_usd'] is not none else '—' }}</td>
+    <td class="num {{ 'pnl-pos' if r['realised_pnl_usd'] and r['realised_pnl_usd'] > 0 else 'pnl-neg' if r['realised_pnl_usd'] and r['realised_pnl_usd'] < 0 }}">{{ '$%.0f' % r['realised_pnl_usd'] if r['realised_pnl_usd'] is not none else '—' }}</td>
     <td class="num">{{ '%.1f%%' % (r['roi_shrunk'] * 100) if r['roi_shrunk'] is not none else '—' }}</td>
     <td class="num">{{ '%.1f%%' % (r['roi_raw'] * 100) if r['roi_raw'] is not none else '—' }}</td>
     <td class="num">{{ r['resolved_positions'] if r['resolved_positions'] is not none else '—' }}</td>
@@ -46,14 +57,15 @@
     <td class="num">{{ '%.0f%%' % (r['hold_to_resolution_rate'] * 100) if r['hold_to_resolution_rate'] is not none else '—' }}</td>
     <td class="num">{{ r['trades_30d'] if r['trades_30d'] is not none else '—' }}</td>
     <td>{% if r['trader_active'] %}<span class="badge badge-good"><span class="glyph">&#10003;</span>Active</span>{% else %}<span class="badge badge-neutral">—</span>{% endif %}</td>
-    <td><code>{{ r['discovery_source'] }}</code></td>
+    <td class="strategy-cell">{% if r['strategy_summary'] %}{{ r['strategy_summary'].split('\n')[0] }}{% else %}<span class="placeholder-inline">not generated yet</span>{% endif %}</td>
   </tr>
   {% else %}
-  <tr><td colspan="9" class="placeholder">No snapshots yet — run the Scout (`python -m polyprinter.scout.run`).</td></tr>
+  <tr><td colspan="13" class="placeholder">No snapshots yet — run the Scout (`python -m polyprinter.scout.run`).</td></tr>
   {% endfor %}
   </tbody>
 </table>
 </div>
+<p class="muted" style="margin-top:4px;">Source column dropped from this view — see each trader's own page for discovery source. To tail a specific trader regardless of rank, or to learn more about the Strategy column, see <a href="/how-it-works#mirror-watches-traders-and-decides-what-to-do">How It Works</a>.</p>
 <p id="trader-empty" class="placeholder" style="display:none;">No traders match that filter.</p>
 
 <script>

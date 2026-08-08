@@ -34,6 +34,8 @@ class DossierMetrics:
     roi_raw: float | None = None
     capital_deployed_usd: float | None = None
     realised_pnl_usd: float | None = None
+    realised_pnl_24h_usd: float | None = None
+    realised_pnl_7d_usd: float | None = None
     resolved_positions: int = 0
     win_rate: float | None = None
     avg_win_usd: float | None = None
@@ -116,6 +118,25 @@ def compute_dossier(
     realized_pnls = [p["realizedPnl"] for p in closed if p.get("realizedPnl") is not None]
     open_realized = [p["realizedPnl"] for p in positions if p.get("realizedPnl") is not None]
     m.realised_pnl_usd = sum(realized_pnls) + sum(open_realized) if (realized_pnls or open_realized) else None
+
+    # 24h/7d realized P&L, bucketed by each closed position's own
+    # `timestamp` (when it resolved — verified live 2026-08-08 against a
+    # real /closed-positions response). Deliberately CLOSED positions
+    # only: open_realized (above) has no clean per-event timestamp to
+    # bucket by, so it's counted in lifetime but not here — a trader with
+    # a meaningfully-sized still-open partial-realized gain will show a
+    # slightly higher lifetime figure than 24h+prior-lifetime would sum
+    # to, and that's an honest gap, not a bug. Same pagination cap as
+    # everything else in this function (CLOSED_POSITIONS_MAX_PAGES) — for
+    # a trader with 500+ resolutions in the last 24h this would undercount,
+    # same accepted limitation as resolved_positions/trades_7d above.
+    now_ts = now.timestamp()
+    m.realised_pnl_24h_usd = sum(
+        p["realizedPnl"] for p in closed if p.get("realizedPnl") is not None and p.get("timestamp") is not None and now_ts - p["timestamp"] <= 86400
+    )
+    m.realised_pnl_7d_usd = sum(
+        p["realizedPnl"] for p in closed if p.get("realizedPnl") is not None and p.get("timestamp") is not None and now_ts - p["timestamp"] <= 7 * 86400
+    )
 
     capital = [p.get("totalBought") or 0.0 for p in closed] + [p.get("totalBought") or 0.0 for p in positions]
     m.capital_deployed_usd = sum(capital) if capital else None

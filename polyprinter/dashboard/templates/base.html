@@ -267,6 +267,11 @@
   tbody tr:last-child td { border-bottom: none; }
   tbody tr:hover td { background: var(--surface-2); }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+  td.num.pnl-pos { color: var(--good); }
+  td.num.pnl-neg { color: var(--critical); }
+  .strategy-cell { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .placeholder-inline { color: var(--text-muted); font-style: italic; }
+  .muted { color: var(--text-muted); font-size: var(--text-sm); }
   th.sortable { cursor: pointer; }
   th.sortable:hover { color: var(--text); }
   th.sortable .arrow { opacity: 0.35; margin-left: 3px; font-size: 0.85em; }

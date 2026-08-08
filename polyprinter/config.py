@@ -1,6 +1,16 @@
 """Config loading: config.yaml (committed defaults) overlaid by
-config-overrides.yaml (gitignored, written by the Telegram /set command in
-a later phase — the file may simply not exist yet, that's fine).
+data/config-overrides.yaml (gitignored, hand-edited today — eventually
+written by the Telegram /set command; the file may simply not exist yet,
+that's fine).
+
+Overrides live under data/, not the repo root, on purpose (corrected
+2026-08-08, before this mechanism had ever actually been exercised): data/
+is the one path every service already bind-mounts (docker-compose.yml),
+so an edit here takes effect on the very next load_config() call — no
+image rebuild, no container recreate. config.yaml itself stays baked into
+the image (COPY config.yaml ./ in the Dockerfile) because it's committed
+defaults meant to ship with a given version of the code; overrides are
+operator state, which belongs in the one place that's actually live.
 """
 
 from __future__ import annotations
@@ -18,7 +28,7 @@ import yaml
 # matches local dev, where you run things from the repo root.
 REPO_ROOT = Path(os.environ.get("POLYPRINTER_HOME", Path.cwd()))
 DEFAULTS_PATH = REPO_ROOT / "config.yaml"
-OVERRIDES_PATH = REPO_ROOT / "config-overrides.yaml"
+OVERRIDES_PATH = REPO_ROOT / "data" / "config-overrides.yaml"
 
 
 def _deep_merge(base: dict[str, Any], overrides: dict[str, Any]) -> dict[str, Any]:

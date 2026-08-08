@@ -23,13 +23,14 @@ from datetime import datetime, timezone
 from polyprinter.config import load_config
 from polyprinter.db.conn import get_connection
 from polyprinter.mandate.issue import maybe_issue_mandate
-from polyprinter.mirror.watch_poll import select_watchlist
+from polyprinter.mirror.watch_poll import ensure_pinned_traders_exist, select_watchlist
 from polyprinter.obs import heartbeat
 from polyprinter.obs.log import Logger
 from polyprinter.scout.discover import discover_candidates, upsert_traders
 from polyprinter.scout.dossier import compute_dossier
 from polyprinter.scout import prune
 from polyprinter.scout.shrinkage import population_mean, shrink
+from polyprinter.scout.strategy import maybe_generate_strategy
 from polyprinter.sources.openrouter import OpenRouterClient
 from polyprinter.sources.polymarket_data import PolymarketDataClient
 
@@ -41,23 +42,25 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _insert_snapshot(conn: sqlite3.Connection, m, roi_shrunk: float | None) -> None:
-    conn.execute(
+def _insert_snapshot(conn: sqlite3.Connection, m, roi_shrunk: float | None) -> int:
+    cur = conn.execute(
         """
         INSERT INTO trader_snapshots (
             address, scanned_at,
             roi_raw, roi_shrunk, capital_deployed_usd, realised_pnl_usd,
+            realised_pnl_24h_usd, realised_pnl_7d_usd,
             resolved_positions, win_rate, avg_win_usd, avg_loss_usd, win_loss_ratio,
             concentration_top1, concentration_top5,
             hold_to_resolution_rate, median_hold_hours, p90_hold_hours,
             entry_price_p10, entry_price_median, entry_price_p90,
             sizing_cv, scale_frequency, median_market_liquidity, category_mix_json,
             trades_7d, trades_30d, open_positions
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             m.address, _now_iso(),
             m.roi_raw, roi_shrunk, m.capital_deployed_usd, m.realised_pnl_usd,
+            m.realised_pnl_24h_usd, m.realised_pnl_7d_usd,
             m.resolved_positions, m.win_rate, m.avg_win_usd, m.avg_loss_usd, m.win_loss_ratio,
             m.concentration_top1, m.concentration_top5,
             m.hold_to_resolution_rate, m.median_hold_hours, m.p90_hold_hours,
@@ -66,6 +69,7 @@ def _insert_snapshot(conn: sqlite3.Connection, m, roi_shrunk: float | None) -> N
             m.trades_7d, m.trades_30d, m.open_positions,
         ),
     )
+    return cur.lastrowid
 
 
 def _issue_mandates_for_watchlist(
@@ -136,6 +140,45 @@ def _issue_mandates_for_watchlist(
     return n_issued
 
 
+def _generate_strategies(
+    conn: sqlite3.Connection, log: Logger, *, addresses: list[str], daily_budget_usd: float
+) -> int:
+    """Plain-English strategy narrative for every trader Scout kept this
+    run (lifetime-profitable, or exempted from prune.py's purge) — not
+    just Mirror's watchlist, so any trader on /traders can be explained,
+    not only the ~20 being tailed. Same no-op-if-unconfigured and
+    per-trader-failure-isolation discipline as _issue_mandates_for_watchlist
+    above; see scout/strategy.py for the actual generation logic.
+    """
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    model = os.environ.get("OPENROUTER_MODEL", "").strip()
+    if not api_key or not model:
+        log.info("strategy.disabled", reason="OPENROUTER_API_KEY or OPENROUTER_MODEL not set")
+        return 0
+
+    n_generated = 0
+    with OpenRouterClient(conn, api_key=api_key, model=model) as client:
+        for address in addresses:
+            trader = conn.execute("SELECT * FROM traders WHERE address = ?", (address,)).fetchone()
+            snapshot = conn.execute(
+                "SELECT * FROM trader_snapshots WHERE address = ? ORDER BY scanned_at DESC LIMIT 1",
+                (address,),
+            ).fetchone()
+            if trader is None or snapshot is None:
+                continue
+            try:
+                outcome = maybe_generate_strategy(
+                    conn, log, trader=trader, snapshot=snapshot, client=client, daily_budget_usd=daily_budget_usd,
+                )
+            except Exception as exc:  # noqa: BLE001 — one bad trader must not kill the rest of the batch
+                log.error("strategy.unexpected_failure", address=address, error=str(exc))
+                continue
+            if outcome == "generated":
+                n_generated += 1
+            conn.commit()
+    return n_generated
+
+
 def run_once(
     conn: sqlite3.Connection,
     log: Logger,
@@ -152,6 +195,12 @@ def run_once(
     config = load_config()
     if per_window_limit is None:
         per_window_limit = config.get("scout", {}).get("leaderboard_limit", 50)
+
+    # Belt-and-suspenders: Mirror's own run_once already does this before
+    # polling, but if Scout's mandate-issuance pass (which reuses Mirror's
+    # watchlist selection) runs first, a freshly pinned address needs its
+    # traders row to exist before anything can reference it.
+    ensure_pinned_traders_exist(conn)
 
     with PolymarketDataClient(conn) as client:
         log.info("discover.start")
@@ -182,11 +231,12 @@ def run_once(
     log.info("shrinkage.population_mean", pop_mean=pop_mean, n=len(rois))
 
     n_purged = 0
+    kept_addresses: list[str] = []
     for m in dossiers:
         if not prune.is_lifetime_profitable(m.realised_pnl_usd) and not prune.has_been_acted_upon(conn, m.address):
-            # Never watched/mandated and not lifetime-profitable — nothing
-            # here is worth keeping. See scout/prune.py for the full
-            # rationale and the audit-history guard this respects.
+            # Never watched/mandated/pinned and not lifetime-profitable —
+            # nothing here is worth keeping. See scout/prune.py for the
+            # full rationale and the audit/pin guard this respects.
             prune.purge_trader(conn, m.address)
             n_purged += 1
             continue
@@ -199,12 +249,21 @@ def run_once(
             "UPDATE traders SET active = ?, last_trade_at = COALESCE(?, last_trade_at) WHERE address = ?",
             (1 if m.active else 0, m.last_trade_at, m.address),
         )
+        kept_addresses.append(m.address)
     conn.commit()
 
     n_mandates = _issue_mandates_for_watchlist(conn, log, watchlist_limit=mandate_watchlist_limit)
+    strategy_daily_budget = config.get("strategy", {}).get("daily_budget_usd", 1.0)
+    n_strategies = _generate_strategies(conn, log, addresses=kept_addresses, daily_budget_usd=strategy_daily_budget)
 
-    n_kept = len(dossiers) - n_purged
-    log.info("run.done", n_snapshotted=n_kept, n_purged_unprofitable=n_purged, n_mandates_issued=n_mandates)
+    n_kept = len(kept_addresses)
+    log.info(
+        "run.done",
+        n_snapshotted=n_kept,
+        n_purged_unprofitable=n_purged,
+        n_mandates_issued=n_mandates,
+        n_strategies_generated=n_strategies,
+    )
     return n_kept
 
 

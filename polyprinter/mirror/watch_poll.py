@@ -21,6 +21,7 @@ import sqlite3
 from datetime import datetime, timezone
 from typing import Any
 
+from polyprinter.config import load_config
 from polyprinter.mirror import execute
 from polyprinter.mirror.decide import decide
 from polyprinter.mirror.position_model import TradeLeg, running_position
@@ -36,24 +37,78 @@ def _now_iso() -> str:
 
 
 def select_watchlist(conn: sqlite3.Connection, n: int) -> list[str]:
-    """Top `n` traders by their latest shrunk ROI snapshot — auto-refreshed
-    every cycle from whatever Scout currently has, no static list to
-    maintain. Traders with no snapshot yet (roi_shrunk IS NULL) sort last
-    and are excluded by the LIMIT before they'd ever be picked, same as
-    the dashboard's own traders-page ordering.
+    """Pinned traders (config.yaml/config-overrides.yaml's
+    `mirror.pinned_addresses` — operator's explicit choice to tail
+    someone, 2026-08-08) always take a slot, in the order configured; the
+    remaining slots fill with the top traders by latest shrunk ROI
+    snapshot, auto-refreshed every cycle from whatever Scout currently
+    has. Pinned count toward `n`, not on top of it, so watchlist size (and
+    therefore Mirror's poll load / Phase 3's mandate cost) stays
+    predictable regardless of how many are pinned. Traders with no
+    snapshot yet (roi_shrunk IS NULL) sort last in the auto-fill and are
+    excluded by the LIMIT before they'd ever be picked, same as the
+    dashboard's own traders-page ordering — this doesn't apply to pinned
+    addresses, which are included even with no snapshot at all.
+
+    Pure read — does not guarantee a `traders` row exists for a freshly
+    pinned address (observed_trades.address has a FK to traders; see
+    ensure_pinned_traders_exist(), which is the write-side counterpart
+    callers that actually poll/mandate must call first).
     """
-    rows = conn.execute(
-        """
-        SELECT s.address
-        FROM trader_snapshots s
-        WHERE s.id IN (SELECT MAX(id) FROM trader_snapshots GROUP BY address)
-          AND s.roi_shrunk IS NOT NULL
-        ORDER BY s.roi_shrunk DESC
-        LIMIT ?
-        """,
-        (n,),
-    ).fetchall()
-    return [r["address"] for r in rows]
+    config = load_config()
+    pinned = list(dict.fromkeys(a.lower() for a in config.get("mirror", {}).get("pinned_addresses", []) if a))
+
+    auto_slots = max(n - len(pinned), 0)
+    auto: list[str] = []
+    if auto_slots > 0:
+        if pinned:
+            placeholders = ",".join("?" * len(pinned))
+            query = f"""
+                SELECT s.address
+                FROM trader_snapshots s
+                WHERE s.id IN (SELECT MAX(id) FROM trader_snapshots GROUP BY address)
+                  AND s.roi_shrunk IS NOT NULL
+                  AND s.address NOT IN ({placeholders})
+                ORDER BY s.roi_shrunk DESC
+                LIMIT ?
+            """
+            params = (*pinned, auto_slots)
+        else:
+            query = """
+                SELECT s.address
+                FROM trader_snapshots s
+                WHERE s.id IN (SELECT MAX(id) FROM trader_snapshots GROUP BY address)
+                  AND s.roi_shrunk IS NOT NULL
+                ORDER BY s.roi_shrunk DESC
+                LIMIT ?
+            """
+            params = (auto_slots,)
+        auto = [r["address"] for r in conn.execute(query, params).fetchall()]
+
+    return pinned + auto
+
+
+def ensure_pinned_traders_exist(conn: sqlite3.Connection) -> None:
+    """Write-side counterpart to select_watchlist()'s pinned-address
+    handling: a manually pinned address may not have been discovered by
+    Scout yet, but observed_trades.address REFERENCES traders(address)
+    with foreign keys enforced (PRAGMA foreign_keys=ON, db/conn.py) — so
+    polling a pinned trader Scout has never seen would crash on the very
+    first insert. Upserts a bare traders row for any pinned address
+    missing one; Scout's own discovery/dossier work fills in the rest
+    (snapshot, ROI, strategy narrative) on its next run, same as any other
+    trader. Idempotent (ON CONFLICT DO NOTHING) — safe to call every cycle
+    from both mirror/run.py and scout/run.py, whichever runs first.
+    """
+    config = load_config()
+    pinned = [a.lower() for a in config.get("mirror", {}).get("pinned_addresses", []) if a]
+    now = datetime.now(timezone.utc).isoformat()
+    for address in pinned:
+        conn.execute(
+            "INSERT INTO traders (address, first_seen, active, discovery_source) "
+            "VALUES (?, ?, 1, 'manual_pin') ON CONFLICT(address) DO NOTHING",
+            (address, now),
+        )
 
 
 def _watch_start_epoch(conn: sqlite3.Connection, address: str) -> int:
@@ -264,6 +319,7 @@ def poll_trader(
 
 
 def run_once(conn: sqlite3.Connection, log: Logger, *, mode: str, mirror_config: dict) -> int:
+    ensure_pinned_traders_exist(conn)
     watchlist = select_watchlist(conn, mirror_config["watchlist_size"])
     log.info("mirror.watchlist", n=len(watchlist))
 

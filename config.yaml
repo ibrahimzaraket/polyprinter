@@ -1,5 +1,6 @@
-# Committed defaults. Operator overrides go in config-overrides.yaml
-# (gitignored, written by the Telegram /set command in a later phase).
+# Committed defaults. Operator overrides go in data/config-overrides.yaml
+# (gitignored, hand-edited today, written by the Telegram /set command in
+# a later phase — see config.py for why it lives under data/, not here).
 
 scout:
   # Rows requested per (window, orderBy) leaderboard call. Server max is 50
@@ -11,7 +12,7 @@ db:
   path: data/polyprinter.db
 
 # Phase 2 (Mirror, polling mode). Chosen as a small, clearly-paper-scale
-# bankroll (matches the "$100 account" framing already used on the
+# bankroll (matches the "$1,000 paper account" framing already used on the
 # dashboard's Definitions tab), not a real budget. These caps start
 # actually mattering the moment Phase 3 issues its first FOLLOW verdict —
 # until then every entry still resolves to SKIP/NO_MANDATE.
@@ -20,6 +21,10 @@ mirror:
   # How many traders to poll each cycle, auto-refreshed each run from the
   # current shrunk-ROI ranking (Scout's latest snapshot per trader) — no
   # static watchlist to maintain by hand until there's a reason to want one.
+  # Manually pinned traders (operator's explicit "tail this person" —
+  # config-overrides.yaml's mirror.pinned_addresses, NOT set here, that
+  # file is gitignored on purpose) always take a slot ahead of the
+  # auto-ranking; see mirror/watch_poll.py's select_watchlist().
   watchlist_size: 20
   paper_bankroll_usd: 1000
   portfolio_exposure_cap_usd: 500      # FR-16 — 50% of bankroll
@@ -35,6 +40,17 @@ mirror:
 # against a runaway loop or a future pricier model, not because it's
 # expected to bind in normal operation.
 mandate:
+  daily_budget_usd: 1.0
+
+# Plain-English strategy narratives (scout/strategy.py, 2026-08-08) — a
+# separate LLM call type from mandates (different question: "what are they
+# doing", not "should we follow them"), so a separate budget line, purpose-
+# scoped in llm_calls so the two can never eat each other's cap. Runs for
+# every trader Scout keeps (lifetime-profitable, or exempted — see
+# scout/prune.py), not just Mirror's watchlist, so cost scales with the
+# whole kept pool (~200 traders), not just 20 — still trivial at this
+# model's pricing, hence the same $1/day backstop as mandate's.
+strategy:
   daily_budget_usd: 1.0
 
 # Dashboard bind address is intentionally NOT configurable here — it's

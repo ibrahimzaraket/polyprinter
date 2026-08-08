@@ -118,3 +118,25 @@ def test_purge_trader_does_not_touch_a_different_address(tmp_path):
     remaining = conn.execute("SELECT url FROM raw_responses").fetchall()
     assert len(remaining) == 1
     assert other in remaining[0]["url"]
+
+
+def test_has_been_acted_upon_true_when_pinned(tmp_path, monkeypatch):
+    import polyprinter.config as config_module
+
+    conn = _make_db(tmp_path)
+    overrides = tmp_path / "config-overrides.yaml"
+    overrides.write_text(f'mirror:\n  pinned_addresses:\n    - "{ADDRESS}"\n')
+    monkeypatch.setattr(config_module, "OVERRIDES_PATH", overrides)
+
+    assert prune.has_been_acted_upon(conn, ADDRESS) is True
+
+
+def test_has_been_acted_upon_false_when_not_pinned(tmp_path, monkeypatch):
+    import polyprinter.config as config_module
+
+    conn = _make_db(tmp_path)
+    overrides = tmp_path / "config-overrides.yaml"
+    overrides.write_text('mirror:\n  pinned_addresses:\n    - "0xsomeoneelse"\n')
+    monkeypatch.setattr(config_module, "OVERRIDES_PATH", overrides)
+
+    assert prune.has_been_acted_upon(conn, ADDRESS) is False

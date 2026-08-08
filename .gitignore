@@ -1,4 +1,5 @@
 .env
+data/config-overrides.yaml
 *.db
 *.db-wal
 *.db-shm

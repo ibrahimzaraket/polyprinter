@@ -10,6 +10,7 @@ import pytest
 
 from polyprinter.db.conn import get_connection
 from polyprinter.obs.log import Logger
+from polyprinter.mirror import watch_poll
 from polyprinter.mirror.watch_poll import poll_trader, select_watchlist
 
 ADDRESS = "0xtrader"
@@ -201,3 +202,71 @@ def test_poll_trader_mirror_exit_actually_closes_a_position(tmp_path):
     assert updated["shares_open"] == pytest.approx(0.0)
     exits = conn.execute("SELECT * FROM position_exits WHERE position_id = ?", (position["id"],)).fetchall()
     assert len(exits) == 1
+
+
+def _set_pinned(monkeypatch, tmp_path, addresses):
+    import polyprinter.config as config_module
+
+    overrides = tmp_path / "config-overrides.yaml"
+    lines = ["mirror:", "  pinned_addresses:"] + [f'    - "{a}"' for a in addresses]
+    overrides.write_text("\n".join(lines) + "\n")
+    monkeypatch.setattr(config_module, "OVERRIDES_PATH", overrides)
+
+
+def test_select_watchlist_includes_pinned_regardless_of_rank(tmp_path, monkeypatch):
+    conn = _make_db(tmp_path)  # ADDRESS ('0xtrader') has no snapshot
+    for addr, roi in [("0xa", 0.10), ("0xb", 0.30), ("0xc", 0.20)]:
+        conn.execute(
+            "INSERT INTO traders (address, first_seen, discovery_source) VALUES (?, ?, 'lb_day')",
+            (addr, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO trader_snapshots (address, scanned_at, roi_shrunk) VALUES (?, ?, ?)",
+            (addr, datetime.now(timezone.utc).isoformat(), roi),
+        )
+    _set_pinned(monkeypatch, tmp_path, ["0xpinned"])  # never discovered, no snapshot at all
+
+    watchlist = watch_poll.select_watchlist(conn, 2)
+
+    assert watchlist[0] == "0xpinned"
+    assert len(watchlist) == 2  # pinned counts toward n, not on top of it
+    assert watchlist[1] == "0xb"  # top-ranked auto slot fills the rest
+
+
+def test_select_watchlist_pinned_excluded_from_auto_ranked_duplicate(tmp_path, monkeypatch):
+    conn = _make_db(tmp_path)
+    for addr, roi in [("0xa", 0.10), ("0xb", 0.30)]:
+        conn.execute(
+            "INSERT INTO traders (address, first_seen, discovery_source) VALUES (?, ?, 'lb_day')",
+            (addr, datetime.now(timezone.utc).isoformat()),
+        )
+        conn.execute(
+            "INSERT INTO trader_snapshots (address, scanned_at, roi_shrunk) VALUES (?, ?, ?)",
+            (addr, datetime.now(timezone.utc).isoformat(), roi),
+        )
+    _set_pinned(monkeypatch, tmp_path, ["0xb"])  # already the top-ranked auto pick
+
+    watchlist = watch_poll.select_watchlist(conn, 2)
+
+    assert watchlist == ["0xb", "0xa"]  # not duplicated
+
+
+def test_ensure_pinned_traders_exist_creates_bare_traders_row(tmp_path, monkeypatch):
+    conn = _make_db(tmp_path)
+    _set_pinned(monkeypatch, tmp_path, ["0xneverseen"])
+
+    watch_poll.ensure_pinned_traders_exist(conn)
+
+    row = conn.execute("SELECT * FROM traders WHERE address = ?", ("0xneverseen",)).fetchone()
+    assert row is not None
+    assert row["discovery_source"] == "manual_pin"
+
+
+def test_ensure_pinned_traders_exist_is_idempotent(tmp_path, monkeypatch):
+    conn = _make_db(tmp_path)
+    _set_pinned(monkeypatch, tmp_path, ["0xneverseen"])
+
+    watch_poll.ensure_pinned_traders_exist(conn)
+    watch_poll.ensure_pinned_traders_exist(conn)  # must not raise (ON CONFLICT DO NOTHING)
+
+    assert conn.execute("SELECT COUNT(*) AS n FROM traders WHERE address = ?", ("0xneverseen",)).fetchone()["n"] == 1

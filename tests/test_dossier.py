@@ -6,6 +6,8 @@ in the real API breaks this test before it breaks a live run.
 import json
 from pathlib import Path
 
+import pytest
+
 from polyprinter.scout.dossier import compute_dossier
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -78,3 +80,39 @@ def test_hold_to_resolution_rate_is_a_fraction():
 
     if m.hold_to_resolution_rate is not None:
         assert 0.0 <= m.hold_to_resolution_rate <= 1.0
+
+
+def test_windowed_pnl_bounded_correctly_against_real_timestamps():
+    """24h/7d realized P&L, bucketed by each closed position's own
+    resolution timestamp — verified against the real fixture data's
+    actual timestamps, not synthetic ones. `now` is pinned just after the
+    fixture's most recent close so the windows are deterministic.
+    """
+    import datetime as dt
+
+    client = FakeDataClient()
+    max_ts = max(p["timestamp"] for p in client.closed_data)
+    now = dt.datetime.fromtimestamp(max_ts + 3600, tz=dt.timezone.utc)
+
+    m = compute_dossier(client, ADDRESS, now=now)
+
+    assert m.realised_pnl_24h_usd == pytest.approx(1202184.8762110001)
+    assert m.realised_pnl_7d_usd == pytest.approx(1202184.8762110001)
+    # lifetime includes every closed position (plus any open-position
+    # partial realized P&L) — strictly more than the 7d window here
+    assert m.realised_pnl_usd > m.realised_pnl_7d_usd
+
+
+def test_windowed_pnl_excludes_positions_older_than_the_window():
+    import datetime as dt
+
+    client = FakeDataClient()
+    # A `now` far beyond every fixture timestamp: nothing should fall
+    # inside either window, but lifetime is unaffected.
+    now = dt.datetime.fromtimestamp(max(p["timestamp"] for p in client.closed_data) + 365 * 86400, tz=dt.timezone.utc)
+
+    m = compute_dossier(client, ADDRESS, now=now)
+
+    assert m.realised_pnl_24h_usd == 0
+    assert m.realised_pnl_7d_usd == 0
+    assert m.realised_pnl_usd > 0

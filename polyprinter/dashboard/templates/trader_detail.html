@@ -22,8 +22,24 @@
 <div class="page-lede">
   <h1>{{ trader['alias'] or trader['address'] }}</h1>
   {% if trader['active'] %}<span class="badge badge-good"><span class="glyph">&#10003;</span>Active</span>{% else %}<span class="badge badge-neutral">Inactive</span>{% endif %}
+  {% if is_tailed %}<span class="badge badge-good" title="Currently watched by Mirror — every trade they make gets a decision">&#128065; Tailed</span>{% endif %}
 </div>
 <p><code>{{ trader['address'] }}</code> &middot; first seen {{ trader['first_seen'] }} &middot; discovered via <code>{{ trader['discovery_source'] }}</code></p>
+
+<h2>Strategy, in plain English</h2>
+{% if latest and latest['strategy_summary'] %}
+{% set narrative_lines = latest['strategy_summary'].split('\n\n', 1) %}
+<div class="card">
+  <p style="font-weight:600; margin-bottom:var(--sp-2);">{{ narrative_lines[0] }}</p>
+  {% if narrative_lines | length > 1 %}<p style="color:var(--text);">{{ narrative_lines[1] }}</p>{% endif %}
+</div>
+{% else %}
+<div class="empty-state">
+  <div class="glyph">&#129504;</div>
+  <div class="headline">No narrative generated yet</div>
+  <p>An LLM writes a plain-English explanation of what this trader is actually doing (not whether to follow them) once Scout evaluates their dossier — needs <code>OPENROUTER_API_KEY</code>/<code>OPENROUTER_MODEL</code> configured and a Scout run to have reached this trader.</p>
+</div>
+{% endif %}
 
 <h2>Active mandate</h2>
 {% if active_mandate %}
@@ -49,6 +65,9 @@
 
   <div class="card">
     <div class="section-label">Performance</div>
+    {{ metric_row('P&L 24h', '$%.0f' % latest['realised_pnl_24h_usd'] if latest['realised_pnl_24h_usd'] is not none else '—') }}
+    {{ metric_row('P&L 7d', '$%.0f' % latest['realised_pnl_7d_usd'] if latest['realised_pnl_7d_usd'] is not none else '—') }}
+    {{ metric_row('P&L lifetime', '$%.0f' % latest['realised_pnl_usd'] if latest['realised_pnl_usd'] is not none else '—') }}
     {{ metric_row('ROI (shrunk)', '%.1f%%' % (latest['roi_shrunk'] * 100) if latest['roi_shrunk'] is not none else '—', 'shrinkage', sparklines.get('roi_shrunk')) }}
     {{ metric_row('ROI (raw)', '%.1f%%' % (latest['roi_raw'] * 100) if latest['roi_raw'] is not none else '—', 'roi') }}
     {{ metric_row('Win rate', '%.0f%%' % (latest['win_rate'] * 100) if latest['win_rate'] is not none else '—', 'win-rate', sparklines.get('win_rate')) }}

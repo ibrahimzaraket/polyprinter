@@ -25,16 +25,25 @@ from __future__ import annotations
 
 import sqlite3
 
+from polyprinter.config import load_config
+
 
 def is_lifetime_profitable(realised_pnl_usd: float | None) -> bool:
     return realised_pnl_usd is not None and realised_pnl_usd > 0
 
 
 def has_been_acted_upon(conn: sqlite3.Connection, address: str) -> bool:
-    """True if this trader has ever had a mandate issued, or ever been
-    watched by Mirror (an observed_trades/decisions row exists) — the
-    guard that keeps purge_trader from ever deleting audited history.
+    """True if this trader has ever had a mandate issued, ever been
+    watched by Mirror (an observed_trades row exists), or is currently
+    manually pinned (mirror.pinned_addresses — an explicit "track this
+    person" is just as strong a signal as Mirror having actually traded
+    with them, 2026-08-08) — the guard that keeps purge_trader from ever
+    deleting audited history or overriding an operator's explicit choice.
     """
+    address = address.lower()
+    pinned = {a.lower() for a in load_config().get("mirror", {}).get("pinned_addresses", []) if a}
+    if address in pinned:
+        return True
     for table, column in (
         ("mandates", "address"),
         ("observed_trades", "address"),
