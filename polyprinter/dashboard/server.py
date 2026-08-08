@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime, timezone
 
 from flask import Flask, abort, g, render_template
 
@@ -96,6 +97,57 @@ def _sparkline(snapshots_chronological: list[sqlite3.Row], field: str, kind: str
         "last_value": _format_metric(ys[-1], kind),
         "n": len(points_raw),
     }
+
+
+RECENT_TRADES_LIMIT = 30
+
+
+def _recent_trades(conn: sqlite3.Connection, address: str, *, limit: int = RECENT_TRADES_LIMIT) -> list[dict]:
+    """Individual trades/redeems for a trader — read from the raw
+    Polymarket /activity response Scout already fetched and archived in
+    raw_responses (sources/raw_store.py persists every external call
+    before parsing, as an audit trail). No new API call, no new schema:
+    this just parses JSON Scout already wrote to disk. offset=0 is the
+    first page of /activity, which comes back newest-first (verified
+    live against real data, 2026-08-08) — so its first `limit` entries
+    are already the trader's most recent activity, no local re-sort
+    needed.
+    """
+    row = conn.execute(
+        """
+        SELECT body FROM raw_responses
+        WHERE source = 'data-api' AND url LIKE '%/activity%'
+          AND url LIKE ? AND url LIKE '%offset=0%'
+        ORDER BY fetched_at DESC LIMIT 1
+        """,
+        (f"%user={address}%",),
+    ).fetchone()
+    if row is None:
+        return []
+    try:
+        entries = json.loads(row["body"])
+    except (TypeError, ValueError):
+        return []
+
+    out = []
+    for e in entries[:limit]:
+        ts = e.get("timestamp")
+        when = None
+        if ts:
+            when = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        out.append(
+            {
+                "when": when,
+                "type": e.get("type"),
+                "side": e.get("side"),
+                "title": e.get("title"),
+                "outcome": e.get("outcome"),
+                "price": e.get("price"),
+                "usdc_size": e.get("usdcSize"),
+                "tx_hash": e.get("transactionHash"),
+            }
+        )
+    return out
 
 
 def _latest_snapshot_per_trader(conn: sqlite3.Connection) -> list[sqlite3.Row]:
@@ -201,6 +253,8 @@ def trader_detail(address: str) -> str:
         if spark is not None:
             sparklines[field] = {**spark, "label": label}
 
+    recent_trades = _recent_trades(conn, address)
+
     return render_template(
         "trader_detail.html",
         trader=trader,
@@ -208,6 +262,7 @@ def trader_detail(address: str) -> str:
         latest=latest,
         category_mix=category_mix,
         sparklines=sparklines,
+        recent_trades=recent_trades,
         active_mandate=active_mandate,
         active_tab="traders",
     )

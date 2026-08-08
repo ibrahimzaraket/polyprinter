@@ -215,7 +215,13 @@
 
   /* ── Tables ── */
   .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
-  table { border-collapse: collapse; width: 100%; font-size: var(--text-base); }
+  /* border-collapse: separate (not collapse) is required here — a
+     collapsed border shared between a sticky <th> and the first <tr>
+     paints as part of whichever cell repaints last under `position:
+     sticky`, which in practice made the sticky header visually cover
+     the first data row. Each cell owns its own border under `separate`,
+     so nothing is shared for the sticky repaint to fight over. */
+  table { border-collapse: separate; border-spacing: 0; width: 100%; font-size: var(--text-base); }
   th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
   th {
     color: var(--text-muted);
@@ -225,7 +231,10 @@
     letter-spacing: 0.05em;
     position: sticky;
     top: 56px;
+    z-index: 5;
     background: var(--surface-2);
+    border-bottom: none;
+    box-shadow: 0 1px 0 var(--border);
     user-select: none;
   }
   tbody tr:last-child td { border-bottom: none; }
@@ -263,6 +272,24 @@
     border: 1px solid var(--border);
   }
   .hint:hover { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); text-decoration: none; }
+
+  /* ── Glossary (Definitions page) ── */
+  .glossary-card { padding: 0; overflow: hidden; }
+  .term-item { padding: var(--sp-4) var(--sp-5); border-bottom: 1px solid var(--border); scroll-margin-top: 72px; }
+  .term-item:last-child { border-bottom: none; }
+  .term-item:target { background: var(--accent-wash); }
+  .term-name { font-weight: 650; font-size: var(--text-md); color: var(--text); margin-bottom: 4px; }
+  .term-def { color: var(--text-2); max-width: 68ch; margin: 0; }
+  .term-why {
+    margin-top: var(--sp-2);
+    padding: var(--sp-2) var(--sp-3);
+    background: var(--surface-2);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+    color: var(--text-2);
+    font-size: var(--text-sm);
+    max-width: 68ch;
+  }
 
   /* ── Dossier (trader detail) ── */
   .dossier-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: var(--sp-4); align-items: start; }

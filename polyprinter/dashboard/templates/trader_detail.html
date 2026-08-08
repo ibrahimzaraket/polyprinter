@@ -133,6 +133,44 @@
 </div>
 {% endif %}
 
+<h2>Recent trades{% if recent_trades %} ({{ recent_trades | length }}){% endif %}</h2>
+{% if recent_trades %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th>When</th><th>Type</th><th>Side</th><th>Market</th><th>Outcome</th>
+    <th class="num">Price</th><th class="num">Size (USDC)</th>
+  </tr>
+  {% for t in recent_trades %}
+  <tr>
+    <td class="mono">{{ t['when'] or '—' }}</td>
+    <td>
+      {% if t['type'] == 'TRADE' %}<span class="badge badge-accent">{{ t['type'] }}</span>
+      {% elif t['type'] == 'REDEEM' %}<span class="badge badge-good">{{ t['type'] }}</span>
+      {% else %}<span class="badge badge-neutral">{{ t['type'] or '—' }}</span>{% endif %}
+    </td>
+    <td>
+      {% if t['side'] == 'BUY' %}<span class="badge badge-good">{{ t['side'] }}</span>
+      {% elif t['side'] == 'SELL' %}<span class="badge badge-critical">{{ t['side'] }}</span>
+      {% else %}—{% endif %}
+    </td>
+    <td style="white-space: normal; min-width: 220px;">{{ t['title'] or '—' }}</td>
+    <td>{{ t['outcome'] or '—' }}</td>
+    <td class="num">{{ '%.0f¢' % (t['price'] * 100) if t['price'] else '—' }}</td>
+    <td class="num">{{ '$%.2f' % t['usdc_size'] if t['usdc_size'] is not none else '—' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+<p style="margin-top: var(--sp-2); font-size: var(--text-xs); color: var(--text-muted);">Most recent {{ recent_trades | length }} activity events from Polymarket, as archived by Scout on its last scan of this trader. Not a live feed.</p>
+{% else %}
+<div class="empty-state">
+  <div class="glyph">&#128203;</div>
+  <div class="headline">No trade history yet</div>
+  <p>This trader has no archived activity yet — run the Scout to fetch one.</p>
+</div>
+{% endif %}
+
 <h2>Metric history ({{ snapshots | length }} snapshot{{ '' if snapshots|length == 1 else 's' }})</h2>
 <div class="table-wrap">
 <table>
