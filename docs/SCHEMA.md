@@ -46,16 +46,20 @@ polyprinter/
 │   │   ├── prompt.py           # dossier → prompt
 │   │   ├── issue.py            # LLM call, validate, persist
 │   │   ├── schema.py           # pydantic model, hard validation
-│   │   └── trigger.py          # delta-detection (FR-5)
+│   │   ├── trigger.py          # delta-detection (FR-5)
+│   │   └── operator.py         # operator-issued mandate — parallel to the LLM's, no LLM call
+│   │
+│   ├── config_write.py         # dashboard's one write target: data/config-overrides.yaml
 │   │
 │   ├── mirror/
-│   │   ├── watch_poll.py       # phase 2: polling (drives real decisions)
-│   │   ├── watch_events.py     # phase 4: on-chain (detects only, doesn't drive)
+│   │   ├── watch_poll.py       # phase 2: polling (drives non-fast-lane decisions)
+│   │   ├── watch_events.py     # phase 4: on-chain (drives fast-lane decisions only; logs the rest)
+│   │   ├── fast_lane.py        # single source of truth: who's fast-laned right now
 │   │   ├── diff_report.py      # phase 4: chain vs poll agreement (exit criterion)
 │   │   ├── position_model.py   # THEIR running position per token (FR-12)
 │   │   ├── decide.py           # mandate lookup + caps → TAKE/SKIP
 │   │   ├── execute.py          # decide.py's verdict → real positions/exits
-│   │   ├── sizing.py           # per-trade, portfolio, correlation caps
+│   │   ├── sizing.py           # per-trade, portfolio, correlation caps, balance-matched sizing
 │   │   └── fills.py            # book-walk simulation + approximate_fill stand-in
 │   │
 │   ├── learner/
@@ -322,5 +326,5 @@ CREATE TABLE raw_responses (            -- every external call, before parsing
 2. **Exits are never gated by mandate state.** A `MIRROR_EXIT` decision proceeds with an expired or absent mandate. Only entries consult mandates.
 3. **`trader_snapshots` is INSERT-only.** No UPDATE, ever — with one narrow, deliberate exception: `scout/strategy.py` UPDATEs a row's own `strategy_summary` moments after inserting it, in the same Scout run, before any other reader has seen it. No snapshot's other columns are ever touched after insert, and no snapshot is ever edited on a later run — the trajectory itself still isn't rewritten.
 4. **`llm_calls.prompt` and `raw_response` are stored in full.** Truncation destroys the only audit trail that matters.
-5. **One writer per table family.** Scout owns traders/snapshots/mandates; Mirror owns observed/decisions/positions; Learner owns outcomes. Dashboard reads only.
+5. **One writer per table family.** Scout owns traders/snapshots/mandates; Mirror owns observed/decisions/positions; Learner owns outcomes. Dashboard reads only — with one narrow, named exception since 2026-08-08: its `/traders/<address>/{tail,untail,mandate,mandate/revoke,analyze}` POST routes write operator mandates and `data/config-overrides.yaml`'s pinned list. Deliberate, not a violation — see `dashboard/server.py`'s own module docstring for why (reachability, not writability, was the real concern).
 6. **`mode` is on every decision and position.** Paper, live, and shadow ledgers never mix in a query without an explicit filter.

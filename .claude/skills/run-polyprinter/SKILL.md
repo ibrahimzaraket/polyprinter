@@ -38,8 +38,11 @@ watcher only started watching from whenever it was first deployed, not
 backfilled, so anything polling recorded before that has no chain-side
 counterpart to match.
 
-To manually tail a specific trader regardless of their ROI rank, edit
-`data/config-overrides.yaml` (gitignored, created empty if missing):
+To manually tail a specific trader regardless of their ROI rank: click
+"Tail this trader" on their `/traders/<address>` page (2026-08-08 — see
+`dashboard/server.py`'s write routes), or edit
+`data/config-overrides.yaml` directly (gitignored, created empty if
+missing, what the button itself writes to):
 
 ```yaml
 mirror:
@@ -49,7 +52,12 @@ mirror:
 
 Takes effect on the next Mirror/Scout cycle — no rebuild or recreate
 needed, since `data/` is bind-mounted (see `config.py`'s module docstring
-for why overrides live there and not at the repo root).
+for why overrides live there and not at the repo root). To also authorize
+real (paper) trading for them with your own sizing — not just watching —
+use the "Your tailing controls" form on the same page (size multiplier,
+optional fast lane) instead of hand-writing a `mandates` row; it goes
+through `mandate/operator.py`'s supersession logic the same way an LLM
+mandate does.
 
 ## Prerequisites
 
@@ -245,6 +253,37 @@ invariant checks.
   directly in a template (that's genuinely raw and needs the literal
   entity, e.g. the `<h2>P&amp;L by market</h2>` heading a few lines
   below it, unaffected by this).
+
+- **A YAML key present with nothing under it parses to `None`, not a
+  missing key — `dict.get(key, default)` doesn't catch that.**
+  `data/config-overrides.yaml`'s `mirror.pinned_addresses:` with no list
+  items under it is exactly this shape; `_pinned_addresses()` used to
+  crash every Scout/Mirror cycle on it (`TypeError: 'NoneType' object is
+  not iterable`). Found by a test, not a live incident. Fixed with
+  `config.get("mirror", {}).get("pinned_addresses") or []` — `or`, not a
+  `.get()` default, since the key genuinely exists.
+
+- **SQLite's `datetime('now')` truncates to whole seconds; Python's
+  `isoformat()` doesn't — comparing the two in the same second can go the
+  wrong way.** `mandate/operator.py`'s `revoke()` originally set
+  `expires_at = now()` and `mirror/fast_lane.py` checked
+  `expires_at > datetime('now')` — a mandate revoked and checked within
+  the same second could still read as active, deterministically, not a
+  rare race (a test caught it every run). Fixed by backdating `revoke()`'s
+  `expires_at` by a full day instead of setting it to the exact instant —
+  sidesteps the precision mismatch rather than depending on exactly how a
+  caller compares it.
+
+- **data-api's `/value?user=<address>` is their current portfolio value,
+  not a raw wallet balance — and it's the right one for sizing.**
+  Verified live 2026-08-08: every real wallet checked had **$0** raw
+  on-chain USDC.e balance (active traders keep ~zero idle cash — capital
+  is either in a position or about to be), while `/value` matched
+  `sum(positions[i].currentValue)` to within ~0.06% (timing skew between
+  two separate calls on fast-moving 5-minute crypto markets, nothing
+  more). Building an on-chain USDC balance lookup for balance-matched
+  sizing (mirror/sizing.py) would have measured a number that's
+  structurally always ~zero for exactly the active traders worth tailing.
 
 - **An `OrderFilled` event's `taker` field is sometimes the exchange
   contract itself, not a second trader.** The CTF Exchange V2 contract
