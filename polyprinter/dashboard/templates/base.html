@@ -42,6 +42,36 @@
     --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --text-xs: 11.5px; --text-sm: 12.5px; --text-base: 13.5px; --text-md: 15px;
     --text-lg: 18px; --text-xl: 22px; --text-2xl: 28px; --text-hero: 34px;
+
+    /* ── Liquid Glass tokens (light) ──────────────────────────────
+       Two tiers: -1 for content surfaces (cards, table containers),
+       tuned lower-blur/higher-alpha so dense numeric tables stay
+       legible; -2 for chrome that's always on screen (sticky header,
+       sticky column headers), tuned more opaque still since it has
+       to win a legibility fight against whatever's scrolling under it
+       at every moment, not just glanceably. Light mode needs MORE
+       alpha than dark for the same felt "translucency" — a light
+       glass over light content has much less luminance contrast to
+       work with than a dark glass over a dark backdrop, so the same
+       0.5 alpha that reads as glass in dark mode reads as smudged
+       in light mode. Values tuned by eye against the ambient wash
+       below, not lifted from a generic glassmorphism preset. */
+    --glass-sat: 1.4;
+    --glass-blur-1: 16px;
+    --glass-blur-2: 20px;
+    --glass-bg-1: rgba(255,255,255,0.66);
+    --glass-bg-2: rgba(255,255,255,0.82);
+    --glass-border: rgba(21,26,33,0.09);
+    --glass-border-hi: rgba(255,255,255,0.75);
+    --glass-shadow: 0 1px 1px rgba(31,41,55,0.04), 0 14px 34px -14px rgba(31,41,55,0.22);
+    /* Ambient wash behind the glass — without this, blur() has nothing
+       to distort and the panels look like flat opacity, not glass.
+       Three low-alpha pools: accent (cool), warning-hue (warm), and a
+       third teal not used anywhere else in the UI as a semantic color
+       — purely decorative depth, never meaning. */
+    --wash-a: rgba(42,120,214,0.13);
+    --wash-b: rgba(217,140,40,0.09);
+    --wash-c: rgba(20,166,151,0.08);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -67,6 +97,25 @@
       --critical-wash: rgba(239,106,106,0.15);
       --shadow-sm: 0 1px 2px rgba(0,0,0,0.35);
       --shadow-md: 0 2px 8px rgba(0,0,0,0.35), 0 12px 28px rgba(0,0,0,0.35);
+
+      /* ── Liquid Glass tokens (dark) — NOT the light values with alpha
+         flipped. Dark surfaces can run more transparent than light ones
+         and still read clearly, because the text/border tokens above
+         already carry high luminance contrast against almost anything
+         behind them; the risk in dark mode is muddiness from too much
+         busy gradient showing through, not illegibility, so blur climbs
+         instead of alpha. */
+      --glass-sat: 1.3;
+      --glass-blur-1: 22px;
+      --glass-blur-2: 26px;
+      --glass-bg-1: rgba(22,24,28,0.52);
+      --glass-bg-2: rgba(10,11,13,0.74);
+      --glass-border: rgba(255,255,255,0.09);
+      --glass-border-hi: rgba(255,255,255,0.07);
+      --glass-shadow: inset 0 1px 0 rgba(255,255,255,0.04), 0 18px 44px -16px rgba(0,0,0,0.6);
+      --wash-a: rgba(91,155,239,0.16);
+      --wash-b: rgba(240,173,46,0.09);
+      --wash-c: rgba(45,212,191,0.09);
     }
   }
 
@@ -80,6 +129,25 @@
     font-size: var(--text-base);
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
+    position: relative;
+    min-height: 100vh;
+  }
+  /* ── Ambient backdrop for Liquid Glass ──────────────────────────
+     Fixed, behind everything, never scrolls — this is what the
+     translucent panels are actually blurring/tinting. Without a
+     textured backdrop, backdrop-filter has nothing to do and every
+     "glass" surface just looks like flat low-opacity paint. Three
+     soft, off-axis pools so the wash reads as depth, not a banner. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(1100px 640px at 8% -10%, var(--wash-a), transparent 60%),
+      radial-gradient(900px 620px at 105% 8%, var(--wash-b), transparent 58%),
+      radial-gradient(1000px 780px at 32% 118%, var(--wash-c), transparent 62%);
+    pointer-events: none;
   }
   h1, h2, h3 { font-weight: 650; letter-spacing: -0.01em; margin: 0 0 var(--sp-2); color: var(--text); }
   h1 { font-size: var(--text-2xl); }
@@ -99,7 +167,7 @@
 
   /* ── Header / nav ── */
   header {
-    background: var(--surface);
+    background: var(--surface); /* solid fallback — see @supports override below */
     border-bottom: 1px solid var(--border);
     padding: 0 var(--sp-5);
     display: flex;
@@ -109,8 +177,17 @@
     position: sticky;
     top: 0;
     z-index: 20;
-    backdrop-filter: saturate(1.4) blur(6px);
     overflow: hidden;
+    box-shadow: 0 1px 0 var(--border);
+  }
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    header {
+      background: var(--glass-bg-2);
+      -webkit-backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat));
+      backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat));
+      border-bottom-color: var(--glass-border);
+      box-shadow: inset 0 -1px 0 var(--glass-border-hi), 0 1px 0 var(--glass-border);
+    }
   }
   header .brand {
     font-weight: 750;
@@ -164,13 +241,25 @@
   main { padding: var(--sp-6) var(--sp-5) var(--sp-7); max-width: 1180px; margin: 0 auto; }
   .page-lede { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-4); flex-wrap: wrap; }
 
-  /* ── Cards / sections ── */
+  /* ── Cards / sections ──
+     Solid fallback first (also what non-backdrop-filter browsers get),
+     glass treatment layered on top under @supports so a browser with no
+     backdrop-filter never renders a too-transparent, illegible card. */
   .card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-sm);
     padding: var(--sp-5);
+  }
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    .card {
+      background: var(--glass-bg-1);
+      -webkit-backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      border-color: var(--glass-border);
+      box-shadow: inset 0 1px 0 var(--glass-border-hi), var(--glass-shadow);
+    }
   }
   .section-label {
     font-size: var(--text-xs);
@@ -204,6 +293,15 @@
   .stat-tile.accent-good::before { background: var(--good); }
   .stat-tile.accent-critical::before { background: var(--critical); }
   .stat-tile.accent-warning::before { background: var(--warning); }
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    .stat-tile {
+      background: var(--glass-bg-1);
+      -webkit-backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      border-color: var(--glass-border);
+      box-shadow: inset 0 1px 0 var(--glass-border-hi), var(--glass-shadow);
+    }
+  }
 
   /* ── Badges (status: never color alone — icon/glyph + label) ── */
   .badge {
@@ -242,6 +340,15 @@
      Bonus: long tables (231+ traders) no longer make the whole page
      enormous. */
   .table-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    .table-wrap {
+      background: var(--glass-bg-1);
+      -webkit-backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      border-color: var(--glass-border);
+      box-shadow: inset 0 1px 0 var(--glass-border-hi), var(--glass-shadow);
+    }
+  }
   /* border-collapse: separate (not collapse) is required here — a
      collapsed border shared between a sticky <th> and the first <tr>
      paints as part of whichever cell repaints last under `position:
@@ -263,6 +370,18 @@
     border-bottom: none;
     box-shadow: 0 1px 0 var(--border);
     user-select: none;
+  }
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    /* Stronger tier (-2) than the table-wrap container it sticks
+       inside — this header has to stay legible while ~200 rows of
+       tabular-nums scroll directly underneath it, not just sit calmly
+       on the ambient wash. */
+    th {
+      background: var(--glass-bg-2);
+      -webkit-backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat));
+      backdrop-filter: blur(var(--glass-blur-2)) saturate(var(--glass-sat));
+      box-shadow: inset 0 1px 0 var(--glass-border-hi), 0 1px 0 var(--glass-border);
+    }
   }
   tbody tr:last-child td { border-bottom: none; }
   tbody tr:hover td { background: var(--surface-2); }
@@ -288,6 +407,14 @@
     border: 1px dashed var(--border-strong);
     border-radius: var(--radius-lg);
     background: var(--surface);
+  }
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    .empty-state {
+      background: var(--glass-bg-1);
+      -webkit-backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      border-color: var(--border-strong); /* stays dashed+solid-toned on purpose — glass everywhere would make "empty" indistinguishable from "populated" */
+    }
   }
   .empty-state .glyph { font-size: 28px; margin-bottom: var(--sp-2); opacity: 0.65; }
   .empty-state .headline { color: var(--text-2); font-weight: 650; font-size: var(--text-md); margin-bottom: 4px; }
@@ -356,10 +483,31 @@
   .flow-box.flow-db { background: var(--accent-wash); border-color: color-mix(in srgb, var(--accent) 30%, transparent); text-align: center; flex: 0 1 160px; }
   .flow-arrow { flex: none; color: var(--text-muted); font-size: 22px; align-self: center; }
   @media (max-width: 700px) { .flow-arrow { transform: rotate(90deg); } }
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    /* .flow-db's own accent-wash background is a deliberately different
+       node (the database, visually distinct from process boxes) — its
+       higher-specificity rule above still wins over this, unaffected. */
+    .flow-box {
+      background: var(--glass-bg-1);
+      -webkit-backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      border-color: var(--glass-border);
+      box-shadow: inset 0 1px 0 var(--glass-border-hi), var(--glass-shadow);
+    }
+  }
 
   .module-card {
     background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
     box-shadow: var(--shadow-sm); margin-bottom: var(--sp-4); overflow: hidden;
+  }
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    .module-card {
+      background: var(--glass-bg-1);
+      -webkit-backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      border-color: var(--glass-border);
+      box-shadow: inset 0 1px 0 var(--glass-border-hi), var(--glass-shadow);
+    }
   }
   .module-card > summary {
     list-style: none; cursor: pointer; padding: var(--sp-4) var(--sp-5);
@@ -396,6 +544,154 @@
     font-size: var(--text-sm); color: var(--text-2);
   }
   .gap-note strong { color: var(--warning); }
+
+  /* ── Buttons ──
+     One system for every write action in the app (tail/untail, mandate
+     submit/revoke, analyze) instead of bare unstyled <button> elements.
+     Semantic variants map to what the action DOES, not to decoration:
+     primary = starts something (tail, authorize, save); outline = a
+     lower-stakes secondary action (analyze/re-analyze); danger = stops
+     or removes something (untail, revoke). */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    font-family: var(--font); font-weight: 650; font-size: var(--text-sm);
+    padding: 8px 16px; border-radius: var(--radius-md); border: 1px solid transparent;
+    cursor: pointer; line-height: 1.3; white-space: nowrap;
+    transition: transform 0.08s ease, box-shadow 0.15s ease, background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease, color 0.15s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn:active { transform: translateY(1px); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn .glyph { font-size: 0.95em; line-height: 1; }
+
+  .btn-primary {
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 92%, white 12%), var(--accent));
+    color: var(--accent-ink);
+    border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.28), 0 6px 18px -8px color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+  .btn-primary:hover { filter: brightness(1.06); }
+
+  .btn-outline {
+    background: var(--surface-2);
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
+  .btn-outline:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-wash); }
+
+  .btn-danger {
+    background: var(--critical-wash);
+    color: var(--critical);
+    border-color: color-mix(in srgb, var(--critical) 35%, transparent);
+  }
+  .btn-danger:hover { background: color-mix(in srgb, var(--critical) 18%, transparent); }
+
+  .btn-sm { padding: 6px 12px; font-size: var(--text-xs); border-radius: var(--radius-sm); }
+
+  .btn[disabled] { opacity: 0.65; cursor: progress; transform: none; }
+  /* Loading state — a request behind this can take up to ~90s (the
+     /analyze route's LLM call); a button with no feedback for that long
+     reads as broken, so disable-on-submit swaps in this spinner and a
+     "…ing" label (see the inline <script> using data-loading-label on
+     each template that needs it). */
+  .btn.is-loading .glyph { display: none; }
+  .btn.is-loading::before {
+    content: ""; width: 12px; height: 12px; border-radius: 50%; flex: none;
+    border: 2px solid currentColor; border-top-color: transparent; opacity: 0.75;
+    animation: btn-spin 0.7s linear infinite;
+  }
+  @keyframes btn-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .btn.is-loading::before { animation-duration: 1.8s; }
+  }
+
+  /* ── Tail / Untail as one visual toggle ──
+     Server-side these stay two separate <form>s (tail.html's own
+     Jinja if/else swaps which one renders — untouched logic), but
+     wrapping them in one flex row with matched sizing/position makes
+     it read as a single state-aware control instead of two random
+     buttons on the page. */
+  .action-row { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin: var(--sp-3) 0 var(--sp-5); }
+  .action-row form { display: inline-flex; margin: 0; }
+
+  /* ── Toggle switch (fast-lane checkbox) ──
+     A checkbox styled as an iOS-style switch — fast lane is a
+     meaningful, binary operational state (on-chain detection vs.
+     polling), not a form afterthought, so it gets a control that reads
+     as a state toggle at a glance rather than a bare checkbox. */
+  .switch { position: relative; display: inline-flex; align-items: center; gap: var(--sp-2); cursor: pointer; user-select: none; }
+  .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .switch .track {
+    width: 38px; height: 22px; border-radius: 999px; flex: none; position: relative;
+    background: var(--surface-3); border: 1px solid var(--border-strong);
+    transition: background 0.15s ease, border-color 0.15s ease;
+  }
+  .switch .track::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--surface); box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    transition: transform 0.15s ease;
+  }
+  .switch input:checked + .track { background: var(--good); border-color: var(--good); }
+  .switch input:checked + .track::after { transform: translateX(16px); background: #fff; }
+  .switch input:focus-visible + .track { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .switch .switch-label { font-size: var(--text-sm); color: var(--text-2); }
+
+  /* ── Compact form panel (mandate controls) ── */
+  .form-panel { display: flex; flex-direction: column; gap: var(--sp-4); max-width: 480px; }
+  .form-field { display: flex; flex-direction: column; gap: 5px; }
+  .form-field > label:first-child { font-size: var(--text-sm); font-weight: 650; color: var(--text); }
+  .form-field .field-help { font-size: var(--text-xs); color: var(--text-muted); line-height: 1.45; }
+  .form-field input[type="number"] {
+    width: 130px; padding: 8px 10px; font: inherit; font-variant-numeric: tabular-nums;
+    background: var(--surface-2); color: var(--text); border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+  }
+  .form-field input[type="number"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+  .form-actions { display: flex; align-items: center; gap: var(--sp-2); flex-wrap: wrap; margin-top: var(--sp-1); }
+
+  /* ── My Copy Portfolio ──
+     Just the wallets actually being tailed — multiplier, fast-lane
+     state, mandate status — separate from the ~200-trader discovery
+     table below it on /traders. */
+  .portfolio-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--sp-3); margin-bottom: var(--sp-5); }
+  .portfolio-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm); padding: var(--sp-4); display: flex; flex-direction: column; gap: 8px;
+    text-decoration: none; color: inherit; transition: transform 0.1s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  }
+  .portfolio-card, .portfolio-card:hover { text-decoration: none; }
+  .portfolio-card:hover { border-color: color-mix(in srgb, var(--accent) 35%, var(--border)); transform: translateY(-1px); }
+  @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    .portfolio-card {
+      background: var(--glass-bg-1);
+      -webkit-backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      backdrop-filter: blur(var(--glass-blur-1)) saturate(var(--glass-sat));
+      border-color: var(--glass-border);
+      box-shadow: inset 0 1px 0 var(--glass-border-hi), var(--glass-shadow);
+    }
+  }
+  .portfolio-card .pc-top { display: flex; align-items: baseline; justify-content: space-between; gap: var(--sp-2); }
+  .portfolio-card .pc-name { font-weight: 700; font-size: var(--text-md); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .portfolio-card .pc-stats { display: flex; flex-wrap: wrap; gap: var(--sp-3) var(--sp-4); font-size: var(--text-sm); color: var(--text-2); }
+  .portfolio-card .pc-stat .pc-stat-label { display: block; font-size: var(--text-xs); color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .portfolio-card .pc-stat .pc-stat-value { font-weight: 650; font-variant-numeric: tabular-nums; color: var(--text); }
+
+  /* ── Filter bar (Traders page) ── */
+  .filter-bar { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: wrap; margin-bottom: var(--sp-4); }
+  .filter-input {
+    flex: 1 1 260px; max-width: 340px; padding: 8px 12px; font-size: var(--text-base); font-family: var(--font);
+    background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius-md);
+  }
+  .filter-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+  .filter-toggle {
+    display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px 6px 10px;
+    border-radius: 999px; border: 1px solid var(--border); background: var(--surface-2);
+    font-size: var(--text-sm); color: var(--text-2); cursor: pointer; user-select: none;
+    transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+  }
+  .filter-toggle input { accent-color: var(--accent); width: 14px; height: 14px; }
+  .filter-toggle:hover { border-color: var(--border-strong); }
+  .filter-toggle.is-active { background: var(--accent-wash); border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--accent); }
 
   ::selection { background: var(--accent-wash); }
 </style>

@@ -295,6 +295,34 @@ invariant checks.
   against the contract's own source and cross-checking every field
   against `data-api`; see `sources/chain.py`'s module docstring.
 
+- **The category-data gap `scout/dossier.py` documented since Phase 1
+  ("no category field on data-api's position/trade/activity objects")
+  turned out to be real but one hop narrower than assumed.** Re-verified
+  live 2026-08-08 while building the category-level Copy Score
+  (workstream §5): data-api still has nothing. gamma-api's
+  `/markets?condition_ids=` response ALSO has no `category`/`tags` field
+  at the market level — and, less obviously, not on the `events[]` array
+  nested *inside* a market response either (checked both against a real
+  live market). The real category data — a `tags` array of
+  `{id, label, slug}` — only shows up on the EVENT object fetched
+  *directly* (`/events?id=`/`/events?slug=`/`/events/keyset?slug=`), not
+  on any copy of it embedded in a `/markets` response. Cost one extra
+  round of live verification to find; see `sources/polymarket_gamma.py`'s
+  module docstring for the full real example.
+
+- **`/events?id=`/`/events?slug=` still return real data live but are
+  already past their own documented sunset date.** Checked live
+  2026-08-08: both respond `200` with correct data, but also carry
+  `deprecation: true`, `warning: 299 - "use /events/keyset"`, and
+  `sunset: Fri, 01 May 2026 00:00:00 GMT` response headers — and that
+  sunset date had already passed (today is 2026-08-08), meaning Polymarket
+  could pull the endpoint with no further warning at any time. Worth
+  actually reading response headers, not just the body, before building
+  against an endpoint that "works" in a quick curl check —
+  `category_score.py`'s cache-warming uses `/events/keyset?slug=...`
+  instead (repeatable `?slug=` params, batches many markets into one
+  call, verified live to carry none of those deprecation headers).
+
 - **Phase 4's event detector deliberately does not write to
   `observed_trades` or call `decide()`/`execute()`.** It only logs
   detections (as `events` rows) for `diff_report.py` to compare against
@@ -417,13 +445,18 @@ invariant checks.
   reason — we never took the entry, so there's nothing of ours to exit.
 - **`mirror/decide.py` doesn't check a mandate's category-allow/block or
   minimum-liquidity fields, on purpose.** Neither a trade's category nor
-  its market's liquidity is available on an `observed_trades` row —
-  `scout/dossier.py` hit the identical gap computing
-  `category_mix_json`/`median_market_liquidity` (see that file's field
-  comments; both need a gamma-api lookup per market that hasn't been
-  built). `mirror/fills.py`'s book-walk is similarly real code with no
-  live order-book source wired to it yet, for the same reason: no
-  verified-live CLOB endpoint, and the `oracle_legacy/` code the repo
-  structure doc says to port fee logic from doesn't exist in this repo.
-  All of this is inert anyway until Phase 3 makes a TAKE possible at all
-  — see the point above.
+  its market's liquidity is available on an `observed_trades` row.
+  Category itself is no longer an unbuilt gap as of 2026-08-08
+  (`scout/category_score.py`'s `market_categories` cache, built for the
+  category-level Copy Score — see workstream §5's own gotcha entry above)
+  — but wiring THAT into `decide.py`'s category-allow/block enforcement
+  was deliberately left undone; that's a `decide.py`/mandate-enforcement
+  change, out of scope for a display-and-scoring workstream, not a "can't
+  be done" gap anymore. `median_market_liquidity` is still a genuine
+  unbuilt gap (same as `scout/dossier.py`'s own field comment says) — no
+  cache or lookup exists for it yet. `mirror/fills.py`'s book-walk is
+  similarly real code with no live order-book source wired to it yet, for
+  the same reason: no verified-live CLOB endpoint, and the
+  `oracle_legacy/` code the repo structure doc says to port fee logic
+  from doesn't exist in this repo. All of this is inert anyway until
+  Phase 3 makes a TAKE possible at all — see the point above.

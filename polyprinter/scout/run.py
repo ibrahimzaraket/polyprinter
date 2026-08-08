@@ -28,10 +28,11 @@ from polyprinter.obs import heartbeat
 from polyprinter.obs.log import Logger
 from polyprinter.scout.discover import discover_candidates, upsert_traders
 from polyprinter.scout.dossier import compute_dossier
-from polyprinter.scout import prune
+from polyprinter.scout import category_score, prune
 from polyprinter.scout.shrinkage import population_mean, shrink
 from polyprinter.sources.openrouter import OpenRouterClient
 from polyprinter.sources.polymarket_data import PolymarketDataClient
+from polyprinter.sources.polymarket_gamma import PolymarketGammaClient
 
 SERVICE = "scout"
 SHRINKAGE_K = 30.0
@@ -211,6 +212,30 @@ def run_once(
         )
         kept_addresses.append(m.address)
     conn.commit()
+
+    # Category-level Copy Score (workstream §5): warm the market->category
+    # cache for every KEPT trader's fetched positions — same population as
+    # who gets a trader_snapshots row above, one batched pass over the
+    # whole run rather than one gamma-api round trip per trader. The
+    # actual A-D grade itself is computed on demand at dashboard render
+    # time (scout/category_score.py's trader_category_scores) from this
+    # cache plus the raw_responses this loop already archived — see that
+    # module's docstring for why the split is done this way.
+    kept_set = set(kept_addresses)
+    category_positions = [
+        p
+        for m in dossiers
+        if m.address in kept_set
+        for p in (m.closed_positions_raw + m.open_positions_raw)
+    ]
+    try:
+        with PolymarketGammaClient(conn) as gamma:
+            n_cached, n_total_markets = category_score.warm_market_category_cache(conn, gamma, category_positions)
+        log.info("category_cache.warmed", n_newly_cached=n_cached, n_total_distinct_markets=n_total_markets)
+    except Exception as exc:  # noqa: BLE001 — a gamma-api hiccup warming the
+        # category cache must not take down the rest of the run (mandate
+        # issuance, run.done) any more than one bad dossier fetch does above.
+        log.error("category_cache.failed", error=str(exc))
 
     n_mandates = _issue_mandates_for_watchlist(conn, log, watchlist_limit=mandate_watchlist_limit)
     # Strategy narratives are on-demand only now (dashboard's /analyze

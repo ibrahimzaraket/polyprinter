@@ -30,6 +30,7 @@ from polyprinter.mandate import operator as operator_mandate
 from polyprinter.mirror.watch_poll import ensure_pinned_traders_exist, select_watchlist
 from polyprinter.obs import heartbeat
 from polyprinter.obs.log import Logger
+from polyprinter.scout import category_score
 from polyprinter.scout.strategy import maybe_generate_strategy
 from polyprinter.sources.openrouter import OpenRouterClient
 
@@ -340,12 +341,94 @@ def _current_watchlist(conn: sqlite3.Connection) -> set[str]:
     return set(select_watchlist(conn, watchlist_size))
 
 
+def _pinned_addresses() -> list[str]:
+    """De-duplicated, lowercased, order-preserved read of
+    mirror.pinned_addresses — the operator's own explicit "tail this
+    person" list, distinct from `_current_watchlist` (which also
+    includes the auto-filled top-ROI slots). Same expression
+    mirror/watch_poll.py's own `_pinned_addresses` uses (see that
+    module and SKILL.md's YAML-null gotcha for why `or []`, not a
+    `.get()` default) — read directly here rather than importing a
+    leading-underscore helper from another module.
+    """
+    raw = load_config().get("mirror", {}).get("pinned_addresses") or []
+    return list(dict.fromkeys(a.lower() for a in raw if a))
+
+
+def _active_operator_mandate(conn: sqlite3.Connection, address: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT * FROM mandates
+        WHERE address = ? AND superseded_by IS NULL AND issued_by = 'operator'
+        ORDER BY version DESC LIMIT 1
+        """,
+        (address,),
+    ).fetchone()
+
+
+def _my_portfolio(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict]:
+    """"My Copy Portfolio" — just the wallets the operator has explicitly
+    pinned, each paired with their active operator mandate if one exists
+    (size multiplier, fast lane). A pure read reshaping data server.py
+    already computes elsewhere (rows = _latest_snapshot_per_trader) plus
+    one small per-address mandate lookup (bounded by pinned-list size,
+    not the full ~200-trader table) — no new business logic, same
+    pattern as _current_watchlist above.
+    """
+    by_address = {r["address"]: r for r in rows}
+    out = []
+    for address in _pinned_addresses():
+        mandate = _active_operator_mandate(conn, address)
+        out.append({"address": address, "snapshot": by_address.get(address), "mandate": mandate})
+    return out
+
+
+CATEGORY_GRADE_ORDER = {"A": 3, "B": 2, "C": 1, "D": 0}
+
+
+def _category_summary(scores: list) -> dict | None:
+    """Best/worst-graded category for the compact /traders column — full
+    breakdown lives on the trader's own page. Only scores that actually
+    cleared MIN_CATEGORY_TRADES_FOR_ANY_GRADE (grade is not None) are
+    eligible for "best"/"worst"; a trader with only ungraded categories
+    (too few resolved positions in every one) gets None here, rendered as
+    "insufficient sample" by the template rather than a fabricated grade.
+    """
+    graded = [s for s in scores if s.grade is not None]
+    if not graded:
+        return None
+    best = max(graded, key=lambda s: (CATEGORY_GRADE_ORDER[s.grade], s.score))
+    worst = min(graded, key=lambda s: (CATEGORY_GRADE_ORDER[s.grade], s.score))
+    return {"best": best, "worst": worst if worst is not best else None, "n_categories": len(graded)}
+
+
 @app.route("/traders")
 def traders() -> str:
     conn = get_db()
     rows = _latest_snapshot_per_trader(conn)
     watchlist = _current_watchlist(conn)
-    return render_template("traders.html", rows=rows, watchlist=watchlist, active_tab="traders")
+    my_portfolio = _my_portfolio(conn, rows)
+    # Only a pinned trader can have fast_lane=1 (it requires an operator
+    # mandate, which requires pinning first — mandate/operator.py) — so
+    # this set only ever needs to cover the (small) pinned list, not
+    # every row, for the /traders "Fast-lane only" filter to work.
+    fast_lane_addresses = {p["address"] for p in my_portfolio if p["mandate"] and p["mandate"]["fast_lane"]}
+    # Category-level Copy Score (workstream §5) — computed on demand per
+    # row, purely from already-archived data (see scout/category_score.py's
+    # module docstring for why this isn't a stored column). Bounded cost:
+    # one raw_responses lookup + a parse of <=50 already-archived closed
+    # positions per trader, same order of magnitude as _pnl_by_market's own
+    # per-trader read on the detail page, just spread across every row here.
+    category_summaries = {r["address"]: _category_summary(category_score.trader_category_scores(conn, r["address"])) for r in rows}
+    return render_template(
+        "traders.html",
+        rows=rows,
+        watchlist=watchlist,
+        my_portfolio=my_portfolio,
+        fast_lane_addresses=fast_lane_addresses,
+        category_summaries=category_summaries,
+        active_tab="traders",
+    )
 
 
 @app.route("/traders/<address>")
@@ -385,6 +468,7 @@ def trader_detail(address: str) -> str:
 
     recent_trades = _recent_trades(conn, address)
     pnl_by_market = _pnl_by_market(conn, address)
+    category_scores = category_score.trader_category_scores(conn, address)
     is_tailed = config_write.is_pinned(address)  # pin status, not watchlist membership — see routes below
     strategy_configured = bool(os.environ.get("OPENROUTER_API_KEY", "").strip() and os.environ.get("OPENROUTER_MODEL", "").strip())
 
@@ -397,6 +481,7 @@ def trader_detail(address: str) -> str:
         sparklines=sparklines,
         recent_trades=recent_trades,
         pnl_by_market=pnl_by_market,
+        category_scores=category_scores,
         active_mandate=active_mandate,
         is_tailed=is_tailed,
         strategy_configured=strategy_configured,

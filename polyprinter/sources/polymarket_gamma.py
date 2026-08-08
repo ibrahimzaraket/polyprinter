@@ -1,10 +1,60 @@
-"""Client for gamma-api.polymarket.com — market metadata and resolutions.
+"""Client for gamma-api.polymarket.com — market metadata, resolutions, and
+(2026-08-08, workstream §5) event-level category tags.
 
 Verified live 2026-08-07 (docs/PRD.md §9, docs/api-notes.md). The one trap:
 `closed` defaults to false SERVER-SIDE even when `condition_ids` narrows to
 one specific market — a resolved market silently returns [] unless you pass
 closed=true explicitly. This client always passes it explicitly so that
 trap can't recur silently.
+
+### Category tags — verified live 2026-08-08
+
+`scout/dossier.py` has carried an open gap since Phase 1: "no category
+field on data-api's position/trade/activity objects." Re-verified live
+2026-08-08 — still true, data-api's `/positions`, `/closed-positions`, and
+`/activity` responses carry no category/tag field of any kind. But
+gamma-api's `/markets?condition_ids=` response ALSO has no `category` or
+`tags` field at the market level, nor on the `events[]` array nested
+inside a market response (checked both, real response, real market
+`0x67a872c836...` — "Ethereum Up or Down"). The category data lives one
+hop further: on the EVENT object fetched directly (`/events?id=<id>` or
+`/events?slug=<slug>`, not `/markets`' nested copy of it), as a `tags`
+array of `{id, label, slug}` objects. Real example for that same
+market's event (id 811521, "Ethereum Up or Down - August 8,
+12:15PM-12:30PM ET"):
+`[{"slug": "up-or-down", ...}, {"slug": "crypto-prices", ...},
+{"slug": "hide-from-new", ...}, {"slug": "recurring", ...},
+{"slug": "crypto", "label": "Crypto", "id": "21"}, {"slug": "ethereum",
+...}, {"slug": "15M", ...}]` — several tags per event, most of them
+narrow (this specific 15-minute recurring market, the specific asset),
+one of them (`crypto`, real id `21`) matching Polymarket's own top-level
+site-nav category. See `category_of()` below for how that's picked out.
+
+Both data-api's `/positions`/`/closed-positions`/`/activity` entries
+already carry an `eventSlug` field alongside `conditionId` (verified live
+in the same responses `scout/dossier.py` already fetches — no extra
+data-api call needed to get it), so the category lookup is one gamma-api
+hop per distinct event, not two.
+
+`/events?id=`/`/events?slug=` both still work live but respond with
+`deprecation: true`, `warning: 299 - "use /events/keyset"`, and
+`sunset: Fri, 01 May 2026 00:00:00 GMT` headers (verified live
+2026-08-08) — and that sunset date is already in the past relative to
+today, meaning the old endpoint could be pulled at any time with no
+further warning. `/events/keyset?slug=...` (repeatable) is the endpoint
+this client actually uses: same `tags` array per event, verified live to
+carry none of those deprecation headers, wraps the list in
+`{"events": [...]}` instead of returning a bare list. Repeating `?slug=`
+across multiple values is honored server-side (verified live: two slugs
+in one call returned both events, each with its own distinct tags) —
+lets `category_score.py` batch many markets into few HTTP calls.
+
+No published rate limit was found for `/events/keyset` (unlike `/markets`
+at 300/10s, PRD §9) — no `x-ratelimit-*` response headers were present on
+a live check either. Treated conservatively anyway: `category_score.py`
+batches lookups (`GAMMA_EVENTS_BATCH_SIZE`) rather than firing one request
+per market, and every call still goes through `with_retry` like every
+other client in this module.
 """
 
 from __future__ import annotations
@@ -67,6 +117,18 @@ class PolymarketGammaClient:
         return self._get(
             "/markets", {"condition_ids": condition_ids, "closed": "true" if closed else "false"}
         )
+
+    def events_by_slugs(self, slugs: list[str]) -> list[dict[str, Any]]:
+        """GET /events/keyset?slug=<a>&slug=<b>&... — batched event lookup
+        by eventSlug (see this module's docstring for why this endpoint,
+        not /events?slug=/id=). Returns whatever events the API found;
+        callers should not assume every input slug comes back (a slug that
+        no longer resolves — renamed/removed event — is simply absent).
+        """
+        if not slugs:
+            return []
+        data = self._get("/events/keyset", {"slug": slugs})
+        return data.get("events", [])
 
     @staticmethod
     def resolution_of(market: dict[str, Any]) -> dict[str, Any] | None:

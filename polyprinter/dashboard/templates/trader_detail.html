@@ -27,22 +27,28 @@
 </div>
 <p><code>{{ trader['address'] }}</code> &middot; first seen {{ trader['first_seen'] }} &middot; discovered via <code>{{ trader['discovery_source'] }}</code></p>
 
-<p>
+<div class="action-row">
   {% if is_tailed %}
-  <form method="post" action="/traders/{{ trader['address'] }}/untail" style="display:inline;">
-    <button type="submit">Untail</button>
+  <form method="post" action="/traders/{{ trader['address'] }}/untail">
+    <button type="submit" class="btn btn-outline" data-loading-label="Untailing…" title="Stop watching — an already-open position still exits cleanly">
+      <span class="glyph">&#10005;</span>Untail
+    </button>
   </form>
   {% else %}
-  <form method="post" action="/traders/{{ trader['address'] }}/tail" style="display:inline;">
-    <button type="submit">Tail this trader</button>
+  <form method="post" action="/traders/{{ trader['address'] }}/tail">
+    <button type="submit" class="btn btn-primary" data-loading-label="Tailing…" title="Mirror will watch every trade this wallet makes">
+      <span class="glyph">&#128065;</span>Tail this trader
+    </button>
   </form>
   {% endif %}
   {% if strategy_configured %}
-  <form method="post" action="/traders/{{ trader['address'] }}/analyze" style="display:inline;">
-    <button type="submit">{{ 'Re-analyze' if latest and latest['strategy_summary'] else 'Analyze strategy' }}</button>
+  <form method="post" action="/traders/{{ trader['address'] }}/analyze">
+    <button type="submit" class="btn btn-outline" data-loading-label="Analyzing… (can take up to ~90s)">
+      <span class="glyph">&#129504;</span>{{ 'Re-analyze' if latest and latest['strategy_summary'] else 'Analyze strategy' }}
+    </button>
   </form>
   {% endif %}
-</p>
+</div>
 
 <h2>Strategy, in plain English</h2>
 {% if latest and latest['strategy_summary'] %}
@@ -62,28 +68,34 @@
 <h2>Your tailing controls</h2>
 <div class="card">
   {% if not is_tailed %}
-  <p>Tail this trader first (button above) before setting a mandate — a mandate without tailing has nothing to act on.</p>
+  <p style="margin:0;">Tail this trader first (button above) before setting a mandate — a mandate without tailing has nothing to act on.</p>
   {% else %}
-  <form method="post" action="/traders/{{ trader['address'] }}/mandate">
-    <p>
-      <label>Size multiplier
-        <input type="number" name="size_multiplier" step="0.1" min="0.1"
-               value="{{ active_mandate['size_multiplier'] if active_mandate and active_mandate['issued_by'] == 'operator' and active_mandate['size_multiplier'] else '1.0' }}">
+  <form method="post" action="/traders/{{ trader['address'] }}/mandate" class="form-panel">
+    <div class="form-field">
+      <label for="size_multiplier">Size multiplier</label>
+      <input id="size_multiplier" type="number" name="size_multiplier" step="0.1" min="0.1"
+             value="{{ active_mandate['size_multiplier'] if active_mandate and active_mandate['issued_by'] == 'operator' and active_mandate['size_multiplier'] else '1.0' }}">
+      <span class="field-help">1.0 mirrors their bet-as-%-of-their-balance exactly with the same %-of-your-balance; 0.5 mirrors at half conviction, 2.0 amplifies.</span>
+    </div>
+    <div class="form-field">
+      <label class="switch">
+        <input type="checkbox" name="fast_lane"
+               {% if active_mandate and active_mandate['issued_by'] == 'operator' and active_mandate['fast_lane'] %}checked{% endif %}>
+        <span class="track"></span>
+        <span class="switch-label">Fast lane — on-chain detection drives their trades directly (seconds, not up to ~60s)</span>
       </label>
-      — 1.0 mirrors their bet-as-%-of-their-balance exactly with the same %-of-your-balance; 0.5 mirrors at half conviction, 2.0 amplifies.
-    </p>
-    <p>
-      <label><input type="checkbox" name="fast_lane"
-             {% if active_mandate and active_mandate['issued_by'] == 'operator' and active_mandate['fast_lane'] %}checked{% endif %}>
-        Fast lane — on-chain detection drives their trades directly (seconds, not up to ~60s)
-      </label>
-    </p>
-    <button type="submit">{{ 'Update mandate' if active_mandate and active_mandate['issued_by'] == 'operator' else 'Authorize tailing (paper)' }}</button>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary" data-loading-label="Saving…">
+        {{ 'Update mandate' if active_mandate and active_mandate['issued_by'] == 'operator' else 'Authorize tailing (paper)' }}
+      </button>
+      {% if active_mandate and active_mandate['issued_by'] == 'operator' %}
+      <button type="submit" form="revoke-mandate-form" class="btn btn-danger btn-sm" data-loading-label="Revoking…">Revoke mandate</button>
+      {% endif %}
+    </div>
   </form>
   {% if active_mandate and active_mandate['issued_by'] == 'operator' %}
-  <form method="post" action="/traders/{{ trader['address'] }}/mandate/revoke" style="margin-top: var(--sp-2);">
-    <button type="submit">Revoke mandate</button>
-  </form>
+  <form id="revoke-mandate-form" method="post" action="/traders/{{ trader['address'] }}/mandate/revoke" style="display:none;"></form>
   {% endif %}
   {% endif %}
 </div>
@@ -200,6 +212,41 @@
 </div>
 {% endif %}
 
+<h2>Category Copy Score{% if category_scores %} ({{ category_scores | length }}){% endif %} <a class="hint" href="/definitions#category-copy-score" title="What is the category Copy Score?">?</a></h2>
+<p class="muted" style="margin-top:-6px;">A–D per category, computed as a plain formula (win rate, sample depth, entry pricing, P&amp;L concentration, sizing conviction) from this trader's own resolved positions — not an LLM opinion. Categories with fewer than 3 resolved positions aren't graded at all; fewer than 8 caps the grade at C. See <a href="/definitions#category-copy-score">definitions</a> for the full formula.</p>
+{% if category_scores %}
+<div class="table-wrap">
+<table>
+  <tr>
+    <th>Category</th><th>Grade</th><th class="num">Score</th><th class="num">Resolved</th>
+    <th class="num">Win rate</th><th class="num">Entry median</th><th class="num">P&amp;L concentration</th><th class="num">Sizing CV</th>
+  </tr>
+  {% for c in category_scores %}
+  <tr>
+    <td>{{ c.category }}</td>
+    <td>
+      {% if c.grade %}<span class="badge {{ 'badge-good' if c.grade == 'A' else 'badge-accent' if c.grade == 'B' else 'badge-warning' if c.grade == 'C' else 'badge-critical' }}">{{ c.grade }}</span>
+      {% else %}<span class="badge badge-neutral" title="Fewer than 3 resolved positions in this category">insufficient sample</span>{% endif %}
+    </td>
+    <td class="num">{{ '%.0f' % c.score }}</td>
+    <td class="num">{{ c.n_resolved }}</td>
+    <td class="num">{{ '%.0f%%' % (c.win_rate * 100) if c.win_rate is not none else '—' }}</td>
+    <td class="num">{{ '%.0f¢' % (c.entry_price_median * 100) if c.entry_price_median is not none else '—' }}</td>
+    <td class="num">{{ '%.0f%%' % (c.concentration_top1 * 100) if c.concentration_top1 is not none else '—' }}</td>
+    <td class="num">{{ '%.2f' % c.sizing_cv if c.sizing_cv is not none else '—' }}</td>
+  </tr>
+  {% endfor %}
+</table>
+</div>
+<p style="margin-top: var(--sp-2); font-size: var(--text-xs); color: var(--text-muted);">Sorted by score, best first. Category comes from Polymarket's own event tags (gamma-api), cached per market the first time Scout sees it — not a title-keyword guess. A market whose event carries no known top-level category tag is grouped under "Other".</p>
+{% else %}
+<div class="empty-state">
+  <div class="glyph">&#127919;</div>
+  <div class="headline">No category data yet</div>
+  <p>This trader has no archived closed positions yet, or their categories haven't been cached — run the Scout to populate both.</p>
+</div>
+{% endif %}
+
 <h2>P&amp;L by market{% if pnl_by_market %} ({{ pnl_by_market | length }}){% endif %}</h2>
 {% if pnl_by_market %}
 <div class="table-wrap">
@@ -312,4 +359,33 @@
   {% endfor %}
 </table>
 </div>
+
+<script>
+(function () {
+  // Generic disable-on-submit for every write form on this page (tail,
+  // untail, mandate save, revoke, analyze). Some of these (analyze) are
+  // synchronous requests that can take up to ~90s server-side (see
+  // server.py's main() docstring on why threaded=True was added) — a
+  // button with no feedback for that long reads as broken. This just
+  // disables the button and swaps its label via data-loading-label; the
+  // actual page navigation on redirect/response is the browser's own,
+  // no fetch/XHR, no framework.
+  document.querySelectorAll('form').forEach(function (form) {
+    form.addEventListener('submit', function () {
+      var btn = form.querySelector('button[type="submit"]') ||
+                document.querySelector('button[type="submit"][form="' + form.id + '"]');
+      if (!btn || btn.disabled) return;
+      var loadingLabel = btn.getAttribute('data-loading-label');
+      if (loadingLabel) {
+        var glyph = btn.querySelector('.glyph');
+        btn.textContent = '';
+        if (glyph) btn.appendChild(glyph);
+        btn.appendChild(document.createTextNode(loadingLabel));
+      }
+      btn.disabled = true;
+      btn.classList.add('is-loading');
+    });
+  });
+})();
+</script>
 {% endblock %}

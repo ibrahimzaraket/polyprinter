@@ -252,3 +252,10 @@ CREATE TABLE raw_responses (            -- every external call, before parsing
     -- added here would collide with 0002's ALTER TABLE on a fresh install.
     -- See that file for why the column exists at all.
 );
+
+-- market_categories (market_id -> category cache for the category-level
+-- Copy Score, workstream §5) is added by
+-- migrations/0005_market_categories.sql, not here — same reason as
+-- 0002/0003/0004's own additions: schema.sql is only ever replayed as
+-- migration 1, so a table added here would misrepresent when it was
+-- actually introduced. See that file for the full rationale.

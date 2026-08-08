@@ -40,6 +40,10 @@ polyprinter/
 │   │   ├── strategy.py         # plain-English narrative: trigger, LLM call, persist
 │   │   ├── strategy_prompt.py  # dossier → narrative prompt
 │   │   ├── strategy_schema.py  # narrative output schema (headline + summary)
+│   │   ├── category_score.py   # per-category A-D Copy Score (workstream §5) — plain
+│   │   │                       # formula, not an LLM call; warms market_categories
+│   │   │                       # (gamma-api event tags) from run_once, grades on
+│   │   │                       # demand at dashboard render time
 │   │   └── resolutions.py      # outcome ingestion (FR-6)
 │   │
 │   ├── mandate/

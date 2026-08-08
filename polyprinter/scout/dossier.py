@@ -64,6 +64,17 @@ class DossierMetrics:
     last_trade_at: str | None = None
     active: bool = False
 
+    # Raw closed/open position dicts this dossier's own fetch already
+    # pulled down (data-api's real shape — conditionId, eventSlug,
+    # avgPrice, totalBought, realizedPnl, per PRD §9). NOT a
+    # trader_snapshots column (see scout/run.py's _insert_snapshot, which
+    # only references named fields) — kept on the object purely so
+    # scout/category_score.py can compute per-category grades from the
+    # SAME fetch this run already did, instead of re-fetching
+    # closed-positions/positions a second time just to get category data.
+    closed_positions_raw: list[dict[str, Any]] = field(default_factory=list)
+    open_positions_raw: list[dict[str, Any]] = field(default_factory=list)
+
 
 def _percentile(values: list[float], pct: float) -> float | None:
     """Linear-interpolation percentile. pct in [0, 100]."""
@@ -113,6 +124,8 @@ def compute_dossier(
     m = DossierMetrics(address=address)
     m.open_positions = len(positions)
     m.resolved_positions = len(closed)
+    m.closed_positions_raw = closed
+    m.open_positions_raw = positions
 
     # ─── Performance ───
     realized_pnls = [p["realizedPnl"] for p in closed if p.get("realizedPnl") is not None]

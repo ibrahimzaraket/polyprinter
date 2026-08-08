@@ -60,6 +60,12 @@
     <div class="term-def">Whether a trader bets roughly the same dollar amount every time ("flat" sizing) or varies their bet size a lot depending on how confident they are ("conviction" sizing). Measured as the coefficient of variation (CV) of their position sizes — a low number means flat, a high number means conviction-sized. </div>
     <div class="term-why">Why it matters: conviction sizing is a signal worth copying (they're telling you which trades they believe in most); flat sizing means bet size carries no extra information.</div>
   </div>
+
+  <div class="term-item" id="category-copy-score">
+    <div class="term-name">Category Copy Score</div>
+    <div class="term-def">An A–D letter grade computed separately for each category a trader trades in (Sports, Crypto, Politics, and so on) — a trader can be sharp in one category and mediocre in another, and one blended dossier number hides that. Computed as a plain formula, not an LLM opinion: category win rate (shrunk toward the trader's own overall win rate so a lucky 4-trade streak in one category doesn't read as an A), sample depth (fewer than 3 resolved positions in a category isn't graded at all; fewer than 8 caps the grade at C), entry price quality (extreme prices near 0¢ or 100¢ are hard to size and fill correctly), P&amp;L concentration (one big win carrying the whole category record scores lower than a consistent spread), and sizing "conviction" (does bet size vary meaningfully with confidence, or is every bet flat-sized). Category itself comes from Polymarket's own event tags (fetched from gamma-api, cached once per market) — not a title-keyword guess.</div>
+    <div class="term-why">Why it matters: a trader worth following in NBA player props might be a coin flip in politics. Sizing and mandate decisions made off one lifetime ROI number treat every category the same; this doesn't.</div>
+  </div>
 </div>
 
 <div class="section-label" style="margin-top: var(--sp-6);">Liveness — is this trader (and this system) still working?</div>

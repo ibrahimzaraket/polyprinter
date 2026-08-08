@@ -6,10 +6,46 @@
 </div>
 <p>Ranked by shrunk ROI (sample-size adjusted, k&asymp;30 — see <a class="hint" href="/definitions#shrinkage" title="What is shrinkage?">?</a>). Raw ROI is shown alongside so you can see how much shrinkage moved a given trader.</p>
 
-<input id="trader-filter" type="text" placeholder="Filter by alias or address&hellip;" autocomplete="off"
-  style="width:100%; max-width:340px; padding:8px 12px; margin-bottom:12px; font-size:var(--text-base);
-         background:var(--surface); color:var(--text); border:1px solid var(--border);
-         border-radius:var(--radius-md); font-family:var(--font);">
+<h2 style="margin-top:0;">My Copy Portfolio</h2>
+<p>Wallets you've explicitly tailed — their sizing and fast-lane status at a glance, separate from the full discovery list below. Manage any of these from the trader's own page.</p>
+{% if my_portfolio %}
+<div class="portfolio-grid">
+  {% for p in my_portfolio %}
+  {% set snap = p['snapshot'] %}
+  {% set mandate = p['mandate'] %}
+  <a class="portfolio-card" href="/traders/{{ p['address'] }}">
+    <div class="pc-top">
+      <span class="pc-name">{{ (snap['alias'] if snap else none) or p['address'][:10] + '…' }}</span>
+      {% if mandate and mandate['fast_lane'] %}<span class="badge badge-good" title="On-chain detection drives their trades directly"><span class="glyph">&#9889;</span>Fast lane</span>{% endif %}
+    </div>
+    {% if mandate %}
+    <div class="pc-stats">
+      <span class="pc-stat"><span class="pc-stat-label">Size &times;</span><span class="pc-stat-value">{{ '%.1f' % mandate['size_multiplier'] if mandate['size_multiplier'] is not none else '1.0' }}</span></span>
+      <span class="pc-stat"><span class="pc-stat-label">Lane</span><span class="pc-stat-value">{{ 'Fast' if mandate['fast_lane'] else 'Polling' }}</span></span>
+      {% if snap %}<span class="pc-stat"><span class="pc-stat-label">ROI (shrunk)</span><span class="pc-stat-value">{{ '%.1f%%' % (snap['roi_shrunk'] * 100) if snap['roi_shrunk'] is not none else '—' }}</span></span>{% endif %}
+    </div>
+    <span class="badge badge-good" style="align-self:flex-start;"><span class="glyph">&#10003;</span>Authorized (paper)</span>
+    {% else %}
+    <div class="pc-stats"><span class="muted">Watched, not yet authorized to trade</span></div>
+    <span class="badge badge-warning" style="align-self:flex-start;"><span class="glyph">&#9888;</span>No mandate — set sizing to activate</span>
+    {% endif %}
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state" style="padding: var(--sp-5);">
+  <div class="glyph">&#128065;</div>
+  <div class="headline">Not tailing anyone yet</div>
+  <p>Click "Tail this trader" on any trader's page to add them here, then set your own sizing and (optionally) fast lane.</p>
+</div>
+{% endif %}
+
+<h2>All scouted traders</h2>
+<div class="filter-bar">
+  <input id="trader-filter" class="filter-input" type="text" placeholder="Filter by alias or address&hellip;" autocomplete="off">
+  <label class="filter-toggle" id="tailed-only-wrap"><input id="tailed-only-filter" type="checkbox"> Tailed only</label>
+  <label class="filter-toggle" id="fastlane-only-wrap"><input id="fastlane-only-filter" type="checkbox"> Fast-lane only</label>
+</div>
 
 <div class="table-wrap">
 <table id="traders-table">
@@ -27,12 +63,14 @@
     <th class="num sortable" data-key="win_rate">Win rate<span class="arrow">&#9662;</span></th>
     <th class="num sortable" data-key="hold_to_resolution_rate">Hold-to-resolution <a class="hint" href="/definitions#hold-to-resolution" title="Why this matters">?</a><span class="arrow">&#9662;</span></th>
     <th class="num sortable" data-key="trades_30d">Trades 30d<span class="arrow">&#9662;</span></th>
+    <th class="num sortable" data-key="category_score">Copy Score <a class="hint" href="/definitions#category-copy-score" title="What is the category Copy Score?">?</a><span class="arrow">&#9662;</span></th>
     <th>Active</th>
     <th>Strategy</th>
   </tr>
   </thead>
   <tbody>
   {% for r in rows %}
+  {% set cat_summary = category_summaries.get(r['address']) if category_summaries else none %}
   <tr class="{{ 'rank-top1' if loop.index == 1 else 'rank-top2' if loop.index == 2 else 'rank-top3' if loop.index == 3 else '' }}"
       data-alias="{{ (r['alias'] or '') | lower }}" data-address="{{ r['address'] | lower }}"
       data-roi_shrunk="{{ r['roi_shrunk'] if r['roi_shrunk'] is not none else '' }}"
@@ -43,10 +81,13 @@
       data-trades_30d="{{ r['trades_30d'] if r['trades_30d'] is not none else '' }}"
       data-pnl_24h="{{ r['realised_pnl_24h_usd'] if r['realised_pnl_24h_usd'] is not none else '' }}"
       data-pnl_7d="{{ r['realised_pnl_7d_usd'] if r['realised_pnl_7d_usd'] is not none else '' }}"
-      data-pnl_lifetime="{{ r['realised_pnl_usd'] if r['realised_pnl_usd'] is not none else '' }}">
+      data-pnl_lifetime="{{ r['realised_pnl_usd'] if r['realised_pnl_usd'] is not none else '' }}"
+      data-category_score="{{ cat_summary['best'].score if cat_summary else '' }}"
+      data-tailed="{{ '1' if r['address'] in watchlist else '0' }}"
+      data-fastlane="{{ '1' if r['address'] in fast_lane_addresses else '0' }}">
     <td class="rank-cell {{ 'top' if loop.index <= 3 }}">{{ loop.index }}</td>
     <td><a href="/traders/{{ r['address'] }}">{{ r['alias'] or r['address'][:10] + '…' }}</a></td>
-    <td>{% if r['address'] in watchlist %}<span class="badge badge-good" title="Currently watched by Mirror — every trade they make gets a decision">&#128065; Tailed</span>{% else %}<span class="badge badge-neutral">—</span>{% endif %}</td>
+    <td>{% if r['address'] in watchlist %}<span class="badge badge-good" title="Currently watched by Mirror — every trade they make gets a decision">&#128065; Tailed</span>{% else %}<span class="badge badge-neutral">—</span>{% endif %}{% if r['address'] in fast_lane_addresses %} <span class="badge badge-accent" title="On-chain detection drives their trades directly"><span class="glyph">&#9889;</span>Fast</span>{% endif %}</td>
     <td class="num {{ 'pnl-pos' if r['realised_pnl_24h_usd'] and r['realised_pnl_24h_usd'] > 0 else 'pnl-neg' if r['realised_pnl_24h_usd'] and r['realised_pnl_24h_usd'] < 0 }}">{{ '$%.0f' % r['realised_pnl_24h_usd'] if r['realised_pnl_24h_usd'] is not none else '—' }}</td>
     <td class="num {{ 'pnl-pos' if r['realised_pnl_7d_usd'] and r['realised_pnl_7d_usd'] > 0 else 'pnl-neg' if r['realised_pnl_7d_usd'] and r['realised_pnl_7d_usd'] < 0 }}">{{ '$%.0f' % r['realised_pnl_7d_usd'] if r['realised_pnl_7d_usd'] is not none else '—' }}</td>
     <td class="num {{ 'pnl-pos' if r['realised_pnl_usd'] and r['realised_pnl_usd'] > 0 else 'pnl-neg' if r['realised_pnl_usd'] and r['realised_pnl_usd'] < 0 }}">{{ '$%.0f' % r['realised_pnl_usd'] if r['realised_pnl_usd'] is not none else '—' }}</td>
@@ -56,11 +97,17 @@
     <td class="num">{{ '%.0f%%' % (r['win_rate'] * 100) if r['win_rate'] is not none else '—' }}</td>
     <td class="num">{{ '%.0f%%' % (r['hold_to_resolution_rate'] * 100) if r['hold_to_resolution_rate'] is not none else '—' }}</td>
     <td class="num">{{ r['trades_30d'] if r['trades_30d'] is not none else '—' }}</td>
+    <td>
+      {% if cat_summary %}
+      <span class="badge {{ 'badge-good' if cat_summary['best'].grade == 'A' else 'badge-accent' if cat_summary['best'].grade == 'B' else 'badge-warning' if cat_summary['best'].grade == 'C' else 'badge-critical' }}" title="Best category: {{ cat_summary['best'].category }} ({{ cat_summary['best'].n_resolved }} resolved)">{{ cat_summary['best'].grade }} {{ cat_summary['best'].category }}</span>
+      {% if cat_summary['worst'] %}<span class="badge {{ 'badge-good' if cat_summary['worst'].grade == 'A' else 'badge-accent' if cat_summary['worst'].grade == 'B' else 'badge-warning' if cat_summary['worst'].grade == 'C' else 'badge-critical' }}" title="Worst category: {{ cat_summary['worst'].category }} ({{ cat_summary['worst'].n_resolved }} resolved)">{{ cat_summary['worst'].grade }} {{ cat_summary['worst'].category }}</span>{% endif %}
+      {% else %}<span class="badge badge-neutral" title="No category has enough resolved positions to grade yet">—</span>{% endif %}
+    </td>
     <td>{% if r['trader_active'] %}<span class="badge badge-good"><span class="glyph">&#10003;</span>Active</span>{% else %}<span class="badge badge-neutral">—</span>{% endif %}</td>
     <td class="strategy-cell">{% if r['strategy_summary'] %}{{ r['strategy_summary'].split('\n')[0] }}{% else %}<span class="placeholder-inline">not generated yet</span>{% endif %}</td>
   </tr>
   {% else %}
-  <tr><td colspan="13" class="placeholder">No snapshots yet — run the Scout (`python -m polyprinter.scout.run`).</td></tr>
+  <tr><td colspan="14" class="placeholder">No snapshots yet — run the Scout (`python -m polyprinter.scout.run`).</td></tr>
   {% endfor %}
   </tbody>
 </table>
@@ -71,21 +118,42 @@
 <script>
 (function () {
   var input = document.getElementById('trader-filter');
+  var tailedOnly = document.getElementById('tailed-only-filter');
+  var fastlaneOnly = document.getElementById('fastlane-only-filter');
   var table = document.getElementById('traders-table');
   if (!table) return;
   var tbody = table.tBodies[0];
   var rows = Array.prototype.slice.call(tbody.rows).filter(function (r) { return r.hasAttribute('data-address'); });
   var emptyMsg = document.getElementById('trader-empty');
 
-  input && input.addEventListener('input', function () {
-    var q = input.value.trim().toLowerCase();
+  // Same substring match as before (alias-or-address contains query),
+  // now ANDed with the two toggle filters — every filter is independent
+  // and re-applied together on any change, so behavior for the text box
+  // alone is unchanged from before this toggle row existed.
+  function applyFilters() {
+    var q = input ? input.value.trim().toLowerCase() : '';
+    var wantTailed = !!(tailedOnly && tailedOnly.checked);
+    var wantFastlane = !!(fastlaneOnly && fastlaneOnly.checked);
     var shown = 0;
     rows.forEach(function (r) {
-      var match = !q || r.getAttribute('data-alias').indexOf(q) !== -1 || r.getAttribute('data-address').indexOf(q) !== -1;
+      var textMatch = !q || r.getAttribute('data-alias').indexOf(q) !== -1 || r.getAttribute('data-address').indexOf(q) !== -1;
+      var tailedMatch = !wantTailed || r.getAttribute('data-tailed') === '1';
+      var fastlaneMatch = !wantFastlane || r.getAttribute('data-fastlane') === '1';
+      var match = textMatch && tailedMatch && fastlaneMatch;
       r.style.display = match ? '' : 'none';
       if (match) shown++;
     });
     emptyMsg.style.display = shown === 0 ? '' : 'none';
+  }
+
+  input && input.addEventListener('input', applyFilters);
+  [tailedOnly, fastlaneOnly].forEach(function (box, i) {
+    if (!box) return;
+    var wrap = document.getElementById(i === 0 ? 'tailed-only-wrap' : 'fastlane-only-wrap');
+    box.addEventListener('change', function () {
+      if (wrap) wrap.classList.toggle('is-active', box.checked);
+      applyFilters();
+    });
   });
 
   var headers = table.querySelectorAll('th.sortable');
