@@ -285,6 +285,17 @@ def now() -> str:
 
     stale_services = {s["service"] for s in stale}
 
+    # A service that's never sent a single heartbeat has no `heartbeats`
+    # row at all (see heartbeat.stale_services) — synthesize a display row
+    # so it shows up in the table as Stale/"never", not silently absent.
+    known = {b["service"] for b in beats}
+    never_beaten = [
+        {"service": s["service"], "last_beat": "never", "detail_json": "no heartbeat recorded yet"}
+        for s in stale
+        if s["last_beat"] is None and s["service"] not in known
+    ]
+    beats = sorted([*beats, *never_beaten], key=lambda b: b["service"])
+
     return render_template(
         "now.html",
         beats=beats,
