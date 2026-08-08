@@ -67,8 +67,13 @@ polyprinter/
 │   │   └── fills.py            # book-walk simulation + approximate_fill stand-in
 │   │
 │   ├── learner/
-│   │   ├── calibrate.py
-│   │   └── shadow.py           # benchmark portfolio (FR-24)
+│   │   ├── resolve.py          # writes outcomes (2026-08-08): CLOSED positions
+│   │   │                       #   resolve instantly (no gamma call); OPEN/PARTIAL
+│   │   │                       #   wait for their market to resolve, then redeem
+│   │   ├── run.py              # entrypoint, own service, 10-min default loop
+│   │   ├── calibrate.py        # not yet built — reads outcomes once resolve.py
+│   │   │                       #   has been running long enough to matter (FR-23)
+│   │   └── shadow.py           # not yet built — benchmark portfolio (FR-24)
 │   │
 │   ├── obs/
 │   │   ├── log.py              # structured, to file AND db

@@ -132,7 +132,7 @@ when driving this interactively.
 ## Run (human path)
 
 ```bash
-docker compose up -d          # all three services: dashboard + scout --loop + mirror --loop
+docker compose up -d          # all four services: dashboard + scout --loop + mirror --loop + learner --loop
 open http://127.0.0.1:8765/   # only reachable from the same machine
 docker compose down
 ```

@@ -31,6 +31,16 @@ services:
       POLYGON_RPC_URL: ${POLYGON_RPC_URL:-}
     restart: unless-stopped
 
+  learner:
+    build: .
+    command: ["python", "-m", "polyprinter.learner.run", "--loop"]
+    volumes:
+      - ./data:/app/data
+    # No secrets needed at all — gamma-api's /markets and /events/keyset
+    # (learner/resolve.py's only network calls, via sources/polymarket_gamma.py)
+    # are unauthenticated, same as Scout's own gamma-api calls.
+    restart: unless-stopped
+
   dashboard:
     build: .
     command: ["python", "-m", "polyprinter.dashboard.server"]

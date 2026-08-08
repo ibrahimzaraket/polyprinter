@@ -53,3 +53,42 @@ def test_all_expected_services_beating_means_nothing_stale(tmp_path):
         heartbeat.beat(conn, service)
     conn.commit()
     assert heartbeat.stale_services(conn) == []
+
+
+def test_scout_long_interval_not_stale_by_default(tmp_path):
+    # Scout's own --interval-seconds default is 86400s (24h) — a beat 3h
+    # old is mid-cycle, not dead. Found live 2026-08-08: without a
+    # per-service threshold this always showed "stale" on the Now tab
+    # despite the last run finishing cleanly.
+    conn = _make_db(tmp_path)
+    three_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+    conn.execute(
+        "INSERT INTO heartbeats (service, last_beat, detail_json) VALUES ('scout', ?, '{}')",
+        (three_hours_ago,),
+    )
+    conn.commit()
+    stale = {s["service"] for s in heartbeat.stale_services(conn)}
+    assert "scout" not in stale
+
+
+def test_explicit_max_age_overrides_per_service_default(tmp_path):
+    # An explicit max_age_seconds is a caller opting into "flag anything
+    # quiet for over N seconds, no exceptions" — it must still catch
+    # scout even though scout's own per-service default would forgive it.
+    conn = _make_db(tmp_path)
+    three_hours_ago = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
+    conn.execute(
+        "INSERT INTO heartbeats (service, last_beat, detail_json) VALUES ('scout', ?, '{}')",
+        (three_hours_ago,),
+    )
+    conn.commit()
+    stale = {s["service"] for s in heartbeat.stale_services(conn, max_age_seconds=120)}
+    assert "scout" in stale
+
+
+def test_learner_beat_recognized_as_expected_service(tmp_path):
+    conn = _make_db(tmp_path)
+    heartbeat.beat(conn, "learner")
+    conn.commit()
+    stale = {s["service"] for s in heartbeat.stale_services(conn)}
+    assert "learner" not in stale

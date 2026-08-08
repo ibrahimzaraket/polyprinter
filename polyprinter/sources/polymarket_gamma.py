@@ -135,17 +135,28 @@ class PolymarketGammaClient:
         """Extract {outcome, outcome_prices} from a market object if resolved,
         else None. outcomes/outcomePrices come back as JSON-encoded strings,
         not native arrays.
+
+        `clob_token_ids` (added for learner/resolve.py, 2026-08-08) is the
+        array parallel to `outcomes`/`outcome_prices` that a `positions`
+        row's own `token_id` needs to be matched against to know which
+        index's resolved price is actually ours — verified live against a
+        real market (`clobTokenIds` field, same JSON-encoded-string-of-array
+        shape as outcomes/outcomePrices). Kept on this same dict rather than
+        a second lookup: a caller already has one market object in hand by
+        the time it needs either piece.
         """
         if not market.get("closed"):
             return None
         try:
             outcomes = json.loads(market.get("outcomes") or "[]")
             outcome_prices = json.loads(market.get("outcomePrices") or "[]")
+            clob_token_ids = json.loads(market.get("clobTokenIds") or "[]")
         except (json.JSONDecodeError, TypeError):
             return None
         return {
             "outcomes": outcomes,
             "outcome_prices": [float(p) for p in outcome_prices],
+            "clob_token_ids": clob_token_ids,
             "closed_time": market.get("closedTime"),
             "uma_resolution_status": market.get("umaResolutionStatus"),
             "neg_risk": market.get("negRisk"),
