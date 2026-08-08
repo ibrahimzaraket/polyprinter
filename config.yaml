@@ -10,11 +10,11 @@ scout:
 db:
   path: data/polyprinter.db
 
-# Phase 2 (Mirror, polling mode). Mandates don't exist until Phase 3, so
-# every entry resolves to SKIP/NO_MANDATE in practice — these numbers only
-# start mattering once mandates start issuing FOLLOW verdicts. Chosen as
-# a small, clearly-paper-scale bankroll (matches the "$100 account" framing
-# already used on the dashboard's Definitions tab), not a real budget.
+# Phase 2 (Mirror, polling mode). Chosen as a small, clearly-paper-scale
+# bankroll (matches the "$100 account" framing already used on the
+# dashboard's Definitions tab), not a real budget. These caps start
+# actually mattering the moment Phase 3 issues its first FOLLOW verdict —
+# until then every entry still resolves to SKIP/NO_MANDATE.
 mirror:
   poll_interval_seconds: 60
   # How many traders to poll each cycle, auto-refreshed each run from the
@@ -24,6 +24,18 @@ mirror:
   paper_bankroll_usd: 1000
   portfolio_exposure_cap_usd: 500      # FR-16 — 50% of bankroll
   correlation_cap_usd: 150             # FR-17 — 15% of bankroll, one market
+
+# Phase 3 (Mandates/LLM). API key and model come from the environment
+# (OPENROUTER_API_KEY / OPENROUTER_MODEL — see .env.example), never
+# committed here. daily_budget_usd is a hard stop (mandate/issue.py
+# refuses to place another call once today's llm_calls.cost_usd sum
+# reaches it) — user's explicit choice, 2026-08-08. At this model's
+# verified live pricing (~$0.00002/call with reasoning effort "low"),
+# this is roughly 50,000 calls/day of headroom; it exists as a backstop
+# against a runaway loop or a future pricier model, not because it's
+# expected to bind in normal operation.
+mandate:
+  daily_budget_usd: 1.0
 
 # Dashboard bind address is intentionally NOT configurable here — it's
 # hardcoded to 127.0.0.1:8765 in dashboard/server.py so a future

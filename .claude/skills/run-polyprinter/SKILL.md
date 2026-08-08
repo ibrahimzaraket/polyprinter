@@ -4,22 +4,35 @@ description: Build, run, and drive PolyPrinter (Polymarket trader-scouting dashb
 ---
 
 PolyPrinter is a three-service Docker Compose app: `scout` (a batch job
-that pulls live Polymarket data and computes trader dossiers), `mirror`
-(polling-mode trade detection against Scout's current watchlist — Phase 2,
-paper only, no Mandates yet so every entry resolves to SKIP/NO_MANDATE by
-design), and `dashboard` (a read-only Flask server on `127.0.0.1:8765`).
-Drive it with `.claude/skills/run-polyprinter/driver.sh` — a curl-based
-smoke script that builds, launches, seeds the Phase 0 fixture, runs Scout
-and Mirror against **live** Polymarket data, and asserts on every
-dashboard route. All paths below are relative to the repo root
-(`/opt/polyprinter`), not to this skill directory.
+that pulls live Polymarket data, computes trader dossiers, AND — Phase 3 —
+issues an LLM mandate for any watched trader whose dossier materially
+changed), `mirror` (polling-mode trade detection against Scout's current
+watchlist — Phase 2, paper only), and `dashboard` (a read-only Flask
+server on `127.0.0.1:8765`). Mandates run *inside* the scout service, not
+as a separate container — Scout owns the `mandates` table (docs/SCHEMA.md
+invariant 5). Drive it with `.claude/skills/run-polyprinter/driver.sh` —
+a curl-based smoke script that builds, launches, seeds the Phase 0
+fixture, runs Scout and Mirror against **live** Polymarket data, and
+asserts on every dashboard route. All paths below are relative to the
+repo root (`/opt/polyprinter`), not to this skill directory.
 
 ## Prerequisites
 
-Docker + Docker Compose v2. Nothing else — no credentials, no API keys.
-Every Polymarket endpoint Scout/dashboard use (leaderboard, positions,
-activity, resolutions) is public and unauthenticated (verified live, see
-`docs/PRD.md` §9).
+Docker + Docker Compose v2. Nothing else for Phase 0-2 — no credentials,
+no API keys. Every Polymarket endpoint Scout/dashboard use (leaderboard,
+positions, activity, resolutions) is public and unauthenticated (verified
+live, see `docs/PRD.md` §9).
+
+Phase 3 (Mandates) additionally needs `OPENROUTER_API_KEY` and
+`OPENROUTER_MODEL` set in `.env` at the repo root (see `.env.example`) —
+without both, `scout` logs `mandate.disabled` and skips mandate issuance
+entirely; nothing else about the stack changes or breaks. **Every driver
+run and every `docker compose run --rm scout ...` invocation makes real,
+billed OpenRouter calls once these are set** — trivial cost at this
+model's pricing (a few thousandths of a cent per call, a full ~20-trader
+watchlist pass costs well under a cent), hard-capped daily at
+`config.yaml`'s `mandate.daily_budget_usd` (default $1, user's explicit
+choice), but real money leaves the account on every run, not simulated.
 
 ```bash
 docker --version         # tested against 29.7.2
@@ -42,9 +55,12 @@ This does everything, in order, against the real stack: build → reset the
 local db → `docker compose up -d dashboard` → check the port is published
 loopback-only → seed the Phase 0 demo decision and confirm it renders →
 hit every dashboard route and check status codes → run Scout against
-**live** Polymarket data (`--leaderboard-limit 5`, ~1-2 min) → confirm real
-trader rows rendered on `/traders` → run Mirror once against **live**
-Polymarket data (polling mode, paper) → confirm 100% decision coverage
+**live** Polymarket data (`--leaderboard-limit 5`, ~1-2 min; also runs
+Phase 3 mandate issuance against the current watchlist if OPENROUTER_* is
+set — see Prerequisites) → confirm real trader rows rendered on
+`/traders`, no `run.failed` event, and no `llm_calls` row with a NULL
+`raw_response` → run Mirror once against **live** Polymarket data (polling
+mode, paper) → confirm 100% decision coverage
 (every `observed_trades` row has a `decisions` row — invariant 1) and that
 a `mirror` heartbeat exists (FR-19) → run the pytest suite → `docker
 compose down`. Exits non-zero on the first failed assertion; prints
@@ -57,6 +73,8 @@ driver:
 docker compose up -d dashboard
 docker compose exec dashboard python scripts/seed_demo_decision.py   # Phase 0 fixture
 docker compose run --rm scout python -m polyprinter.scout.run --leaderboard-limit 10   # fast Scout pass
+# add --mandate-watchlist-limit 3 above too if OPENROUTER_* is set and you just want
+# a quick check, not a full ~20-trader mandate pass (each call is real seconds, not ms)
 docker compose run --rm mirror python -m polyprinter.mirror.run   # one Mirror poll cycle
 curl -s http://127.0.0.1:8765/traders | less
 # or open http://127.0.0.1:8765/ in a browser on the same machine
@@ -178,6 +196,36 @@ invariant checks.
   back *into* a container (`docker compose exec ... python -c "..."`) or
   over the network (`curl` against a published port), never by reading
   the bind-mount path directly from the agent's own shell.
+
+- **The configured Phase 3 model is a *reasoning* model — its reasoning
+  tokens are emitted before the real answer and count against
+  `max_tokens`.** A short/terse test prompt badly underestimates this: it
+  passed fine at `max_tokens=200`, then a real dossier prompt truncated
+  mid-JSON at `max_tokens=1500` (`finish_reason: "length"`, invalid JSON)
+  and *again* at 4000 for occasional outlier-verbose traders. Fixed with
+  `reasoning: {"effort": "low"}` (cut reasoning-token spend roughly 30x
+  in testing) plus a generous `max_tokens` (6000 — see
+  `mandate/issue.py`'s `ISSUE_MAX_TOKENS`). A parse failure past even
+  that is expected occasionally (~1 in 10-20 calls) and handled as a
+  normal logged failure, not a crash — see the next point.
+- **One bad mandate call used to crash Scout's entire run, discarding a
+  whole batch's already-good snapshot work.** The per-candidate dossier
+  loop already had "one bad item logs and continues" discipline; the
+  mandate-issuance loop added right after it in the same file didn't,
+  and a live run hit exactly that: three traders into an ~18-trader
+  watchlist, an unguarded exception (see next point) killed mandate
+  issuance for everyone after it, with `run.done` never logging at all.
+  Fixed by wrapping each trader's `maybe_issue_mandate` call in its own
+  try/except in `scout/run.py`'s `_issue_mandates_for_watchlist`, same
+  as the dossier loop above it.
+- **That crash's actual trigger: the LLM response's `content` field came
+  back JSON `null` at least once live**, not just truncated text — likely
+  the reasoning trace consuming the *entire* token budget before any
+  answer token was emitted. `sources/openrouter.py` now coerces `None` to
+  `""` before returning, and `mandate/issue.py` defensively re-coerces
+  again before ever touching that value — a `NOT NULL constraint failed:
+  llm_calls.raw_response` crash is worse than one trader correctly
+  logging as a parse failure.
 
 ## Troubleshooting
 

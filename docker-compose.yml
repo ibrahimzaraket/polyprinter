@@ -4,6 +4,16 @@ services:
     command: ["python", "-m", "polyprinter.scout.run", "--loop"]
     volumes:
       - ./data:/app/data
+    # Phase 3 (Mandates): only these two vars, not a blanket `env_file:
+    # .env` — that root .env also holds Telegram/Phase-4/Phase-6 secrets
+    # this container has no business seeing. Docker Compose auto-loads
+    # .env from the compose file's own directory for ${...} substitution
+    # here, no explicit env_file needed. Both intentionally unset if
+    # .env doesn't define them — see mandate/issue.py, which treats a
+    # missing key as "Mandates disabled," not a crash.
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
     restart: unless-stopped
 
   mirror:

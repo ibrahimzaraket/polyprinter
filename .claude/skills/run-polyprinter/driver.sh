@@ -110,7 +110,8 @@ check_status /how-it-works 200
 check_status /traders/0xdoes-not-exist 404
 
 echo "== Phase 1: run Scout against LIVE Polymarket data (small pool, fast) =="
-docker compose run --rm scout python -m polyprinter.scout.run --leaderboard-limit 5
+SCOUT_START=$(date -u +%Y-%m-%dT%H:%M:%S)
+docker compose run --rm scout python -m polyprinter.scout.run --leaderboard-limit 5 --mandate-watchlist-limit 3
 
 echo "== confirm real trader data rendered =="
 check_contains /traders "ROI (shrunk)"
@@ -120,6 +121,39 @@ if [ "$TRADER_ROWS" -lt 1 ]; then
   FAIL=1
 else
   echo "ok    /traders rendered $TRADER_ROWS trader row(s)"
+fi
+
+echo "== confirm Scout run (incl. Phase 3 mandate calls, if OPENROUTER_* is set) completed cleanly =="
+# Regression guard for a real bug hit live 2026-08-08: one bad mandate call
+# crashed the entire scout run (run.failed), discarding a whole batch's
+# already-good snapshot work. Any run.failed event since this run started
+# means that class of bug is back.
+SCOUT_FAILURES=$(docker compose exec -T dashboard python -c "
+import sqlite3
+conn = sqlite3.connect('/app/data/polyprinter.db')
+n = conn.execute(
+    \"SELECT COUNT(*) FROM events WHERE service = 'scout' AND message = 'run.failed' AND ts >= ?\",
+    ('$SCOUT_START',),
+).fetchone()[0]
+print(n)
+" | tr -d '\r')
+if [ "$SCOUT_FAILURES" != "0" ]; then
+  echo "FAIL  scout logged run.failed during this driver run"
+  FAIL=1
+else
+  echo "ok    scout run completed with no run.failed event"
+fi
+BAD_LLM_CALLS=$(docker compose exec -T dashboard python -c "
+import sqlite3
+conn = sqlite3.connect('/app/data/polyprinter.db')
+n = conn.execute(\"SELECT COUNT(*) FROM llm_calls WHERE raw_response IS NULL\").fetchone()[0]
+print(n)
+" | tr -d '\r')
+if [ "$BAD_LLM_CALLS" != "0" ]; then
+  echo "FAIL  $BAD_LLM_CALLS llm_calls row(s) have a NULL raw_response (invariant 4 violated)"
+  FAIL=1
+else
+  echo "ok    every llm_calls row has a stored raw_response"
 fi
 
 echo "== Phase 2: run Mirror once against LIVE Polymarket data (polling mode) =="

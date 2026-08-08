@@ -1,6 +1,9 @@
 """Scout entrypoint. One call to `run_once()` = one full scan: discover
 candidates, fetch + compute a dossier per candidate, shrink ROI against the
-batch's population mean, write append-only trader_snapshots rows.
+batch's population mean, write append-only trader_snapshots rows, then
+(Phase 3) issue a mandate for any watched trader whose dossier materially
+changed. Scout owns the `mandates` table (docs/SCHEMA.md invariant 5) —
+there is no separate mandate service, this is a step in Scout's own run.
 
 `main()` loops it daily when run as a service (`docker compose up scout`);
 `run_once()` alone is what tests and the seed script call.
@@ -9,17 +12,21 @@ batch's population mean, write append-only trader_snapshots rows.
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import time
 from datetime import datetime, timezone
 
 from polyprinter.config import load_config
 from polyprinter.db.conn import get_connection
+from polyprinter.mandate.issue import maybe_issue_mandate
+from polyprinter.mirror.watch_poll import select_watchlist
 from polyprinter.obs import heartbeat
 from polyprinter.obs.log import Logger
 from polyprinter.scout.discover import discover_candidates, upsert_traders
 from polyprinter.scout.dossier import compute_dossier
 from polyprinter.scout.shrinkage import population_mean, shrink
+from polyprinter.sources.openrouter import OpenRouterClient
 from polyprinter.sources.polymarket_data import PolymarketDataClient
 
 SERVICE = "scout"
@@ -57,10 +64,86 @@ def _insert_snapshot(conn: sqlite3.Connection, m, roi_shrunk: float | None) -> N
     )
 
 
-def run_once(conn: sqlite3.Connection, log: Logger, *, per_window_limit: int | None = None) -> int:
+def _issue_mandates_for_watchlist(
+    conn: sqlite3.Connection, log: Logger, *, watchlist_limit: int | None = None
+) -> int:
+    """Phase 3: one mandate attempt per trader Mirror actually watches (not
+    the full ~200-candidate discovery pool — a trader ranked #150 will
+    never be mirrored, so a mandate for them is spend with no purpose).
+    Reuses mirror.watch_poll's own watchlist selection rather than
+    duplicating "top N by shrunk ROI" query logic in two places — Mirror
+    should always be mandated for exactly who it's watching, never a
+    differently-sized set.
+
+    No-ops (logs why, doesn't crash) if OPENROUTER_API_KEY/MODEL aren't
+    set — Phase 3 is opt-in by simply not configuring it, same as every
+    other credential-gated capability in this project.
+
+    `watchlist_limit` overrides config.yaml's mirror.watchlist_size for
+    this call only — same shape as run_once's own per_window_limit.
+    Needed because each mandate call takes real wall-clock time (a real,
+    detailed dossier prompt plus a reasoning model's generation is
+    seconds, not milliseconds); without this, driver.sh's own "small
+    pool, fast" scout smoke test would silently balloon from ~2 minutes
+    to 15+ once OPENROUTER_* is configured, since the mandate watchlist
+    is independent of --leaderboard-limit.
+    """
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    model = os.environ.get("OPENROUTER_MODEL", "").strip()
+    if not api_key or not model:
+        log.info("mandate.disabled", reason="OPENROUTER_API_KEY or OPENROUTER_MODEL not set")
+        return 0
+
+    config = load_config()
+    watchlist_size = watchlist_limit or config.get("mirror", {}).get("watchlist_size", 20)
+    daily_budget_usd = config.get("mandate", {}).get("daily_budget_usd", 1.0)
+
+    watchlist = select_watchlist(conn, watchlist_size)
+    n_issued = 0
+    with OpenRouterClient(conn, api_key=api_key, model=model) as client:
+        for address in watchlist:
+            trader = conn.execute("SELECT * FROM traders WHERE address = ?", (address,)).fetchone()
+            snapshot = conn.execute(
+                "SELECT * FROM trader_snapshots WHERE address = ? ORDER BY scanned_at DESC LIMIT 1",
+                (address,),
+            ).fetchone()
+            if trader is None or snapshot is None:
+                continue
+            try:
+                outcome = maybe_issue_mandate(
+                    conn, log,
+                    trader=trader, snapshot=snapshot,
+                    client=client, daily_budget_usd=daily_budget_usd,
+                )
+            except Exception as exc:  # noqa: BLE001 — one bad mandate call must not kill
+                # the rest of the watchlist's mandate re-evaluation. Hit live
+                # 2026-08-08: an unguarded exception three traders into a batch
+                # silently killed mandate issuance for everyone after it, exactly
+                # the class of bug the dossier loop above was already written to
+                # prevent. (conn is autocommit — see db/conn.py — so there's no
+                # transaction to roll back here; whatever that trader's call
+                # already wrote stands, logged, same as any other partial state
+                # this schema expects invariant 1's reconciliation query to catch.)
+                log.error("mandate.unexpected_failure", address=address, error=str(exc))
+                continue
+            if outcome.startswith("issued:"):
+                n_issued += 1
+            conn.commit()
+    return n_issued
+
+
+def run_once(
+    conn: sqlite3.Connection,
+    log: Logger,
+    *,
+    per_window_limit: int | None = None,
+    mandate_watchlist_limit: int | None = None,
+) -> int:
     """Returns the number of traders snapshotted. per_window_limit, if given,
     overrides config.yaml's scout.leaderboard_limit (which itself defaults
-    to 50) — mainly useful to shrink a verification run.
+    to 50) — mainly useful to shrink a verification run. mandate_watchlist_limit
+    does the same for Phase 3's mandate pass (independent of per_window_limit —
+    see _issue_mandates_for_watchlist).
     """
     config = load_config()
     if per_window_limit is None:
@@ -100,7 +183,9 @@ def run_once(conn: sqlite3.Connection, log: Logger, *, per_window_limit: int | N
         )
     conn.commit()
 
-    log.info("run.done", n_snapshotted=len(dossiers))
+    n_mandates = _issue_mandates_for_watchlist(conn, log, watchlist_limit=mandate_watchlist_limit)
+
+    log.info("run.done", n_snapshotted=len(dossiers), n_mandates_issued=n_mandates)
     return len(dossiers)
 
 
@@ -114,6 +199,13 @@ def main() -> None:
         default=None,
         help="override config.yaml's scout.leaderboard_limit — mainly for a fast verification run",
     )
+    parser.add_argument(
+        "--mandate-watchlist-limit",
+        type=int,
+        default=None,
+        help="override config.yaml's mirror.watchlist_size for Phase 3 mandate issuance only — "
+        "independent of --leaderboard-limit, mainly for a fast verification run",
+    )
     args = parser.parse_args()
 
     conn = get_connection()
@@ -122,7 +214,11 @@ def main() -> None:
     def tick() -> None:
         heartbeat.beat(conn, SERVICE, phase="starting")
         try:
-            n = run_once(conn, log, per_window_limit=args.leaderboard_limit)
+            n = run_once(
+                conn, log,
+                per_window_limit=args.leaderboard_limit,
+                mandate_watchlist_limit=args.mandate_watchlist_limit,
+            )
             heartbeat.beat(conn, SERVICE, phase="idle", last_run_traders=n)
         except Exception as exc:  # noqa: BLE001
             log.error("run.failed", error=str(exc))
