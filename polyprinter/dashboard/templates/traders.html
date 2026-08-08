@@ -43,6 +43,20 @@
 <h2>All scouted traders</h2>
 <div class="filter-bar">
   <input id="trader-filter" class="filter-input" type="text" placeholder="Filter by alias or address&hellip;" autocomplete="off">
+  <select id="category-filter" class="filter-select" title="Show only traders graded in this category">
+    <option value="">All categories</option>
+    {% for cat in category_filter_options %}
+    <option value="{{ cat }}">{{ cat }}</option>
+    {% endfor %}
+  </select>
+  <select id="grade-filter" class="filter-select" title="Minimum Copy Score grade — applies to the category selected above, or a trader's best category if 'All categories'">
+    <option value="">Any Copy Score</option>
+    <option value="A">A only</option>
+    <option value="B">B or better</option>
+    <option value="C">C or better</option>
+  </select>
+  <label class="filter-num-wrap">Min ROI <input id="roi-filter" class="filter-num" type="number" placeholder="%" step="1" inputmode="numeric"></label>
+  <label class="filter-num-wrap">Min win rate <input id="winrate-filter" class="filter-num" type="number" placeholder="%" step="1" min="0" max="100" inputmode="numeric"></label>
   <label class="filter-toggle" id="tailed-only-wrap"><input id="tailed-only-filter" type="checkbox"> Tailed only</label>
   <label class="filter-toggle" id="fastlane-only-wrap"><input id="fastlane-only-filter" type="checkbox"> Fast-lane only</label>
 </div>
@@ -63,6 +77,7 @@
     <th class="num sortable" data-key="win_rate">Win rate<span class="arrow">&#9662;</span></th>
     <th class="num sortable" data-key="hold_to_resolution_rate">Hold-to-resolution <a class="hint" href="/definitions#hold-to-resolution" title="Why this matters">?</a><span class="arrow">&#9662;</span></th>
     <th class="num sortable" data-key="trades_30d">Trades 30d<span class="arrow">&#9662;</span></th>
+    <th class="num sortable" data-key="capital_deployed">Capital deployed<span class="arrow">&#9662;</span></th>
     <th class="num sortable" data-key="category_score">Copy Score <a class="hint" href="/definitions#category-copy-score" title="What is the category Copy Score?">?</a><span class="arrow">&#9662;</span></th>
     <th>Active</th>
     <th>Strategy</th>
@@ -82,9 +97,11 @@
       data-pnl_24h="{{ r['realised_pnl_24h_usd'] if r['realised_pnl_24h_usd'] is not none else '' }}"
       data-pnl_7d="{{ r['realised_pnl_7d_usd'] if r['realised_pnl_7d_usd'] is not none else '' }}"
       data-pnl_lifetime="{{ r['realised_pnl_usd'] if r['realised_pnl_usd'] is not none else '' }}"
+      data-capital_deployed="{{ r['capital_deployed_usd'] if r['capital_deployed_usd'] is not none else '' }}"
       data-category_score="{{ cat_summary['best'].score if cat_summary else '' }}"
       data-tailed="{{ '1' if r['address'] in watchlist else '0' }}"
-      data-fastlane="{{ '1' if r['address'] in fast_lane_addresses else '0' }}">
+      data-fastlane="{{ '1' if r['address'] in fast_lane_addresses else '0' }}"
+      data-categories='{{ (category_grades.get(r["address"], {})) | tojson }}'>
     <td class="rank-cell {{ 'top' if loop.index <= 3 }}">{{ loop.index }}</td>
     <td><a href="/traders/{{ r['address'] }}">{{ r['alias'] or r['address'][:10] + '…' }}</a></td>
     <td>{% if r['address'] in watchlist %}<span class="badge badge-good" title="Currently watched by Mirror — every trade they make gets a decision">&#128065; Tailed</span>{% else %}<span class="badge badge-neutral">—</span>{% endif %}{% if r['address'] in fast_lane_addresses %} <span class="badge badge-accent" title="On-chain detection drives their trades directly"><span class="glyph">&#9889;</span>Fast</span>{% endif %}</td>
@@ -97,6 +114,7 @@
     <td class="num">{{ '%.0f%%' % (r['win_rate'] * 100) if r['win_rate'] is not none else '—' }}</td>
     <td class="num">{{ '%.0f%%' % (r['hold_to_resolution_rate'] * 100) if r['hold_to_resolution_rate'] is not none else '—' }}</td>
     <td class="num">{{ r['trades_30d'] if r['trades_30d'] is not none else '—' }}</td>
+    <td class="num">{{ '$%.0f' % r['capital_deployed_usd'] if r['capital_deployed_usd'] is not none else '—' }}</td>
     <td>
       {% if cat_summary %}
       <span class="badge {{ 'badge-good' if cat_summary['best'].grade == 'A' else 'badge-accent' if cat_summary['best'].grade == 'B' else 'badge-warning' if cat_summary['best'].grade == 'C' else 'badge-critical' }}" title="Best category: {{ cat_summary['best'].category }} ({{ cat_summary['best'].n_resolved }} resolved)">{{ cat_summary['best'].grade }} {{ cat_summary['best'].category }}</span>
@@ -107,7 +125,7 @@
     <td class="strategy-cell">{% if r['strategy_summary'] %}{{ r['strategy_summary'].split('\n')[0] }}{% else %}<span class="placeholder-inline">not generated yet</span>{% endif %}</td>
   </tr>
   {% else %}
-  <tr><td colspan="14" class="placeholder">No snapshots yet — run the Scout (`python -m polyprinter.scout.run`).</td></tr>
+  <tr><td colspan="16" class="placeholder">No snapshots yet — run the Scout (`python -m polyprinter.scout.run`).</td></tr>
   {% endfor %}
   </tbody>
 </table>
@@ -118,6 +136,10 @@
 <script>
 (function () {
   var input = document.getElementById('trader-filter');
+  var categoryFilter = document.getElementById('category-filter');
+  var gradeFilter = document.getElementById('grade-filter');
+  var roiFilter = document.getElementById('roi-filter');
+  var winrateFilter = document.getElementById('winrate-filter');
   var tailedOnly = document.getElementById('tailed-only-filter');
   var fastlaneOnly = document.getElementById('fastlane-only-filter');
   var table = document.getElementById('traders-table');
@@ -125,13 +147,38 @@
   var tbody = table.tBodies[0];
   var rows = Array.prototype.slice.call(tbody.rows).filter(function (r) { return r.hasAttribute('data-address'); });
   var emptyMsg = document.getElementById('trader-empty');
+  var GRADE_RANK = { A: 3, B: 2, C: 1, D: 0 };
 
-  // Same substring match as before (alias-or-address contains query),
-  // now ANDed with the two toggle filters — every filter is independent
-  // and re-applied together on any change, so behavior for the text box
-  // alone is unchanged from before this toggle row existed.
+  // Parsed once per row up front (not on every filter pass) — same JSON
+  // every time, no reason to re-parse it per keystroke.
+  rows.forEach(function (r) {
+    var raw = r.getAttribute('data-categories');
+    r._categories = raw ? JSON.parse(raw) : {};
+  });
+
+  // Best graded category across everything a trader has, for the "All
+  // categories" + grade-floor combination — same "best category" concept
+  // server.py's _category_summary already uses for the compact column,
+  // just recomputed client-side from the same per-category grade map so
+  // this filter and that column can never disagree.
+  function bestGrade(categories) {
+    var best = null;
+    Object.keys(categories).forEach(function (cat) {
+      var g = categories[cat];
+      if (best === null || GRADE_RANK[g] > GRADE_RANK[best]) best = g;
+    });
+    return best;
+  }
+
+  // Every filter is independent and ANDed together, re-applied in full
+  // on any single control's change — same pattern the original two
+  // toggles used, just extended.
   function applyFilters() {
     var q = input ? input.value.trim().toLowerCase() : '';
+    var wantCategory = categoryFilter ? categoryFilter.value : '';
+    var wantGradeFloor = gradeFilter ? gradeFilter.value : '';
+    var minRoi = roiFilter && roiFilter.value !== '' ? parseFloat(roiFilter.value) : null;
+    var minWinRate = winrateFilter && winrateFilter.value !== '' ? parseFloat(winrateFilter.value) : null;
     var wantTailed = !!(tailedOnly && tailedOnly.checked);
     var wantFastlane = !!(fastlaneOnly && fastlaneOnly.checked);
     var shown = 0;
@@ -139,14 +186,35 @@
       var textMatch = !q || r.getAttribute('data-alias').indexOf(q) !== -1 || r.getAttribute('data-address').indexOf(q) !== -1;
       var tailedMatch = !wantTailed || r.getAttribute('data-tailed') === '1';
       var fastlaneMatch = !wantFastlane || r.getAttribute('data-fastlane') === '1';
-      var match = textMatch && tailedMatch && fastlaneMatch;
+
+      // Category+grade: no category picked -> grade floor (if any) checks
+      // the trader's single best category; a category picked -> grade
+      // floor checks that specific category's grade, and "no grade in
+      // this category at all" always fails once a category is picked
+      // (picking a category with "Any Copy Score" still means "show only
+      // traders graded in this category").
+      var relevantGrade = wantCategory ? r._categories[wantCategory] : bestGrade(r._categories);
+      var categoryMatch = !wantCategory || !!relevantGrade;
+      var gradeMatch = !wantGradeFloor || (relevantGrade && GRADE_RANK[relevantGrade] >= GRADE_RANK[wantGradeFloor]);
+
+      var roiAttr = r.getAttribute('data-roi_shrunk');
+      var roiMatch = minRoi === null || (roiAttr !== '' && parseFloat(roiAttr) * 100 >= minRoi);
+      var wrAttr = r.getAttribute('data-win_rate');
+      var winRateMatch = minWinRate === null || (wrAttr !== '' && parseFloat(wrAttr) * 100 >= minWinRate);
+
+      var match = textMatch && tailedMatch && fastlaneMatch && categoryMatch && gradeMatch && roiMatch && winRateMatch;
       r.style.display = match ? '' : 'none';
       if (match) shown++;
     });
     emptyMsg.style.display = shown === 0 ? '' : 'none';
   }
 
-  input && input.addEventListener('input', applyFilters);
+  [input, roiFilter, winrateFilter].forEach(function (el) {
+    el && el.addEventListener('input', applyFilters);
+  });
+  [categoryFilter, gradeFilter].forEach(function (el) {
+    el && el.addEventListener('change', applyFilters);
+  });
   [tailedOnly, fastlaneOnly].forEach(function (box, i) {
     if (!box) return;
     var wrap = document.getElementById(i === 0 ? 'tailed-only-wrap' : 'fastlane-only-wrap');

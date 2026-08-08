@@ -607,6 +607,14 @@ def _category_summary(scores: list) -> dict | None:
     return {"best": best, "worst": worst if worst is not best else None, "n_categories": len(graded)}
 
 
+# Every category name category_score.py can ever hand back (its own
+# KNOWN_CATEGORY_TAGS labels, plus UNCATEGORIZED) — the /traders category
+# filter's dropdown is built from this fixed list, not "whatever
+# categories happen to appear on this page load," so the filter doesn't
+# silently gain/lose options as data changes underneath it.
+TRADER_CATEGORY_FILTER_OPTIONS = [label for _, label in category_score.KNOWN_CATEGORY_TAGS] + [category_score.UNCATEGORIZED]
+
+
 @app.route("/traders")
 def traders() -> str:
     conn = get_db()
@@ -618,18 +626,26 @@ def traders() -> str:
     # this set only ever needs to cover the (small) pinned list, not
     # every row, for the /traders "Fast-lane only" filter to work.
     fast_lane_addresses = {p["address"] for p in my_portfolio if p["mandate"] and p["mandate"]["fast_lane"]}
-    # Category-level Copy Score (workstream §5) — computed on demand per
-    # row, purely from already-archived data (see scout/category_score.py's
-    # module docstring for why this isn't a stored column). Bounded cost:
-    # one raw_responses lookup + a parse of <=50 already-archived closed
-    # positions per trader, same order of magnitude as _pnl_by_market's own
-    # per-trader read on the detail page, just spread across every row here.
-    category_summaries = {r["address"]: _category_summary(category_score.trader_category_scores(conn, r["address"])) for r in rows}
+    # Category-level Copy Score (workstream §5) — computed once per row,
+    # purely from already-archived data (see scout/category_score.py's
+    # module docstring for why this isn't a stored column), then reshaped
+    # two ways: the existing best/worst summary for the compact column,
+    # and a full category->grade map for the category+grade filter below
+    # (client-side, via data-categories on each row — see traders.html).
+    # Bounded cost: one raw_responses lookup + a parse of <=50
+    # already-archived closed positions per trader, same order of
+    # magnitude as _pnl_by_market's own per-trader read on the detail
+    # page, just spread across every row here.
+    all_scores = {r["address"]: category_score.trader_category_scores(conn, r["address"]) for r in rows}
+    category_summaries = {addr: _category_summary(scores) for addr, scores in all_scores.items()}
+    category_grades = {addr: {s.category: s.grade for s in scores if s.grade is not None} for addr, scores in all_scores.items()}
     return render_template(
         "traders.html",
         rows=rows,
         watchlist=watchlist,
         my_portfolio=my_portfolio,
+        category_grades=category_grades,
+        category_filter_options=TRADER_CATEGORY_FILTER_OPTIONS,
         fast_lane_addresses=fast_lane_addresses,
         category_summaries=category_summaries,
         active_tab="traders",
