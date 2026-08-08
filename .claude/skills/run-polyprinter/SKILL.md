@@ -167,6 +167,26 @@ invariant checks.
   mid-run. 408 was added after a live full-scale run (2026-08-07) lost one
   candidate to a bare timeout that would've succeeded on retry.
 
+- **A TAKE/MIRROR_EXIT decision used to be a dead letter.** `decide.py`
+  only computes what should happen; nothing turned that into a real
+  `positions`/`position_exits` row until `mirror/execute.py` (added
+  2026-08-08, code review — no live incident, no FOLLOW mandate had fired
+  yet). Without it, `sizing.py`'s portfolio/correlation caps (which query
+  `positions`) would have read $0 exposure forever, satisfied by
+  construction, and the paper portfolio wouldn't have existed the moment a
+  real FOLLOW verdict landed. Fill simulation uses `fills.approximate_fill`
+  (their observed price, zero slippage, real fee), not `fills.walk_book` —
+  there's still no live-verified order book source; see fills.py.
+
+- **Scout now deletes everything about a lifetime-unprofitable trader it's
+  never actually watched** (operator's choice, 2026-08-08 — see
+  `scout/prune.py`). Don't be surprised that `/traders` only ever shows
+  traders with positive lifetime realized P&L, or that `traders`/
+  `trader_snapshots` row counts can go DOWN between Scout runs — that's
+  the prune step working, not data loss. Anyone ever mandated or watched
+  by Mirror is exempt regardless of profitability (`has_been_acted_upon`)
+  — decision/audit history is never touched by this.
+
 - **`raw_responses` used to grow unbounded from exact duplicates.** Scout
   has no incremental cursor the way Mirror's `watch_poll.py` does, so a
   re-run refetches each trader's full activity history from scratch —
