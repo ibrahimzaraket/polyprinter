@@ -34,8 +34,12 @@ polyprinter/
 │   │
 │   ├── scout/
 │   │   ├── discover.py         # 4 leaderboard windows + non-profit sampling (FR-2)
-│   │   ├── dossier.py          # metric computation
+│   │   ├── dossier.py          # metric computation (incl. windowed P&L: 24h/7d/lifetime)
 │   │   ├── shrinkage.py        # sample-size adjustment
+│   │   ├── prune.py            # drops data for unprofitable, never-watched traders
+│   │   ├── strategy.py         # plain-English narrative: trigger, LLM call, persist
+│   │   ├── strategy_prompt.py  # dossier → narrative prompt
+│   │   ├── strategy_schema.py  # narrative output schema (headline + summary)
 │   │   └── resolutions.py      # outcome ingestion (FR-6)
 │   │
 │   ├── mandate/
@@ -316,7 +320,7 @@ CREATE TABLE raw_responses (            -- every external call, before parsing
 
 1. **Every `observed_trades` row has exactly one `decisions` row.** No silent drops. Enforce with a reconciliation query in the daily digest.
 2. **Exits are never gated by mandate state.** A `MIRROR_EXIT` decision proceeds with an expired or absent mandate. Only entries consult mandates.
-3. **`trader_snapshots` is INSERT-only.** No UPDATE, ever.
+3. **`trader_snapshots` is INSERT-only.** No UPDATE, ever — with one narrow, deliberate exception: `scout/strategy.py` UPDATEs a row's own `strategy_summary` moments after inserting it, in the same Scout run, before any other reader has seen it. No snapshot's other columns are ever touched after insert, and no snapshot is ever edited on a later run — the trajectory itself still isn't rewritten.
 4. **`llm_calls.prompt` and `raw_response` are stored in full.** Truncation destroys the only audit trail that matters.
 5. **One writer per table family.** Scout owns traders/snapshots/mandates; Mirror owns observed/decisions/positions; Learner owns outcomes. Dashboard reads only.
 6. **`mode` is on every decision and position.** Paper, live, and shadow ledgers never mix in a query without an explicit filter.

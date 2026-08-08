@@ -38,6 +38,19 @@ watcher only started watching from whenever it was first deployed, not
 backfilled, so anything polling recorded before that has no chain-side
 counterpart to match.
 
+To manually tail a specific trader regardless of their ROI rank, edit
+`data/config-overrides.yaml` (gitignored, created empty if missing):
+
+```yaml
+mirror:
+  pinned_addresses:
+    - "0x1234...abcd"
+```
+
+Takes effect on the next Mirror/Scout cycle — no rebuild or recreate
+needed, since `data/` is bind-mounted (see `config.py`'s module docstring
+for why overrides live there and not at the repo root).
+
 ## Prerequisites
 
 Docker + Docker Compose v2. Nothing else for Phase 0-2 — no credentials,
@@ -208,6 +221,30 @@ invariant checks.
   the prune step working, not data loss. Anyone ever mandated or watched
   by Mirror is exempt regardless of profitability (`has_been_acted_upon`)
   — decision/audit history is never touched by this.
+
+- **A reasoning model's `max_tokens` needs real headroom, every time this
+  project adds a new LLM call type.** `scout/strategy.py`'s first version
+  shipped with `MAX_TOKENS = 1500` and hit the exact failure
+  `mandate/issue.py` already documented at that same threshold: the
+  model's reasoning tokens are emitted (and billed, and counted) before
+  the actual answer, so a low budget truncates real output mid-JSON
+  (`finish_reason: "length"`, empty/invalid content). Found live
+  2026-08-08 on the very first full Scout run after shipping it. Fixed by
+  matching mandate's own proven value (6000) — cost impact is negligible
+  either way (~$0.0003-0.0006/call observed). If a third LLM call type
+  ever gets added here, start at 6000, don't re-discover this.
+
+- **Jinja auto-escapes `{{ label }}` inside a macro — don't pre-escape a
+  string literal you pass into one.** `trader_detail.html`'s `metric_row`
+  macro renders its `label` argument via `{{ label }}`; passing
+  `'P&amp;L 24h'` as that argument gets escaped a second time
+  (`P&amp;amp;L 24h`, literally visible in the page). Found live
+  2026-08-08 right after adding the P&L metric rows. Pass the plain
+  string (`'P&L 24h'`) and let Jinja escape it once — this only bites
+  labels passed through a variable/macro, not static HTML already sitting
+  directly in a template (that's genuinely raw and needs the literal
+  entity, e.g. the `<h2>P&amp;L by market</h2>` heading a few lines
+  below it, unaffected by this).
 
 - **An `OrderFilled` event's `taker` field is sometimes the exchange
   contract itself, not a second trader.** The CTF Exchange V2 contract

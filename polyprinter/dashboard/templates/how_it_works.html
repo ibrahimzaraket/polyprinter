@@ -95,12 +95,26 @@
 </details>
 
 <details class="module-card">
-  <summary><span class="module-path">polyprinter/scout/run.py</span><span class="module-summary">— the entrypoint that ties discover &rarr; dossier &rarr; shrink together</span></summary>
+  <summary><span class="module-path">polyprinter/scout/prune.py</span><span class="module-summary">— drops data for lifetime-unprofitable, never-watched traders</span></summary>
+  <div class="module-body">
+    <p>Operator's explicit choice (2026-08-08): if a trader's dossier shows a negative-or-zero lifetime realized P&amp;L, and Mirror has never actually watched or mandated them, and they're not manually pinned (below), their <code>trader_snapshots</code> row and every raw API response mentioning them get deleted rather than kept forever. Never touches anyone who's ever been acted on — that history stays permanent regardless of profitability.</p>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/scout/strategy.py</span><span class="module-summary">— an LLM explains what a trader is actually doing, in plain English</span></summary>
+  <div class="module-body">
+    <p>A second, independent LLM call from Mandates &mdash; different question, different budget (config.yaml's <code>strategy.daily_budget_usd</code>, purpose-scoped in <code>llm_calls</code> so it can never eat into the mandate budget or vice versa). Runs for every trader Scout keeps, not just Mirror's watchlist, so any profitable trader on <code>/traders</code> can be understood, not only the ones being tailed. Same delta-trigger discipline as mandate/trigger.py &mdash; only re-generates when the dossier materially changed since the last narrative. Output is a short headline plus a 2-4 sentence explanation, stored on the snapshot row itself and shown on <code>/traders</code> and each trader's own page.</p>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/scout/run.py</span><span class="module-summary">— the entrypoint that ties discover &rarr; dossier &rarr; shrink &rarr; prune &rarr; mandate &rarr; strategy together</span></summary>
   <div class="module-body">
     <div class="fn-list">
       <div class="fn-item">
         <div class="fn-name">run_once<span class="paren">(conn, log)</span></div>
-        <div class="fn-desc">One full scan: discover candidates &rarr; compute a dossier for each (one bad candidate is logged and skipped, never kills the run) &rarr; compute the population mean &rarr; shrink every trader's ROI against it &rarr; insert one <code>trader_snapshots</code> row per trader (append-only, never an UPDATE &mdash; a trader's trajectory over time is itself a signal).</div>
+        <div class="fn-desc">One full scan: discover candidates &rarr; compute a dossier for each (one bad candidate is logged and skipped, never kills the run) &rarr; compute the population mean &rarr; shrink every trader's ROI against it &rarr; either purge (prune.py) or insert one <code>trader_snapshots</code> row per kept trader (append-only, never an UPDATE &mdash; a trader's trajectory over time is itself a signal, with the one narrow exception of strategy_summary being filled in moments later on that same fresh row) &rarr; issue mandates for the watchlist &rarr; generate strategy narratives for everyone kept.</div>
       </div>
       <div class="fn-item">
         <div class="fn-name">main<span class="paren">()</span></div>
@@ -183,7 +197,7 @@
     <div class="fn-list">
       <div class="fn-item">
         <div class="fn-name">select_watchlist<span class="paren">(conn, n=20)</span></div>
-        <div class="fn-desc">Top 20 traders by their latest shrunk ROI snapshot &mdash; re-picked fresh every single cycle from whatever Scout currently has. No fixed list to maintain by hand; a trader falling out of the top 20 simply stops being watched next cycle.</div>
+        <div class="fn-desc">Manually pinned traders (operator's explicit "tail this person" &mdash; <code>data/config-overrides.yaml</code>'s <code>mirror.pinned_addresses</code>, hand-edited, gitignored, takes effect on the next cycle with no rebuild) always take a slot first, in the order configured. The rest fill from the top traders by latest shrunk ROI snapshot, re-picked fresh every single cycle from whatever Scout currently has. Pinned count toward the total of 20, not on top of it, so poll load and mandate cost stay predictable regardless of how many are pinned. A pinned address Scout has never seen still needs a bare <code>traders</code> row before it can be polled &mdash; <code>ensure_pinned_traders_exist</code>, called by both Mirror and Scout before anything else, handles that.</div>
       </div>
       <div class="fn-item">
         <div class="fn-name">poll_trader<span class="paren">(conn, client, log, address)</span></div>
@@ -401,7 +415,7 @@
 </div>
 
 <h2>What's real vs. what's still a documented gap</h2>
-<div class="gap-note"><strong>Live and real:</strong> trader discovery &amp; scoring (Scout), shrinkage-adjusted ranking, real-time trade detection &amp; decision-writing (Mirror), position/exit bookkeeping (execute.py) with an approximate fill model, all of it against live Polymarket data, all of it verified by 94 passing tests plus real end-to-end runs.</div>
+<div class="gap-note"><strong>Live and real:</strong> trader discovery &amp; scoring (Scout), shrinkage-adjusted ranking, windowed P&amp;L (24h/7d/lifetime), plain-English strategy narratives (scout/strategy.py) for every kept trader, manual trader pinning, real-time trade detection &amp; decision-writing (Mirror), position/exit bookkeeping (execute.py) with an approximate fill model, all of it against live Polymarket data, all of it verified by 110 passing tests plus real end-to-end runs.</div>
 <div class="gap-note"><strong>Live and real, added Phase 3:</strong> LLM mandate issuance against real dossiers, over OpenRouter, with full prompt/response logging (invariant 4) and a hard daily spend cap — real judgment, real reasoning grounded in real numbers, verified against live runs (including two bugs found and fixed the same day: a reasoning-model token budget pitfall, and a crash-the-whole-batch bug in the mandate loop).</div>
 <div class="gap-note"><strong>Waiting on an actual FOLLOW verdict:</strong> every entry decision still resolves to SKIP in practice — not because the mechanism is missing, but because every real mandate issued so far genuinely came back SKIP. No position has actually opened yet as a result (though the machinery that would is live and tested). A real order-book fill model and category/liquidity mandate rules both stay unbuilt regardless (need endpoints that either aren't verified live or aren't built).</div>
 <div class="gap-note"><strong>In progress, Phase 4:</strong> on-chain event detection (chain.py/watch_events.py) runs live alongside polling, watching the same traders directly on Polygon — but it only logs what it sees, it doesn't drive any decision yet. diff_report.py measures agreement against polling; the exit criterion (PRD &sect;7) is 72 hours clean before polling is ever retired as the thing that actually opens/closes positions.</div>
