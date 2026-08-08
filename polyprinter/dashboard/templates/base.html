@@ -110,6 +110,7 @@
     top: 0;
     z-index: 20;
     backdrop-filter: saturate(1.4) blur(6px);
+    overflow: hidden;
   }
   header .brand {
     font-weight: 750;
@@ -119,6 +120,7 @@
     align-items: center;
     gap: var(--sp-2);
     white-space: nowrap;
+    flex: none;
   }
   header .brand .dot {
     width: 9px; height: 9px; border-radius: 50%;
@@ -135,8 +137,16 @@
     color: var(--warning);
     border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
     white-space: nowrap;
+    flex: none;
   }
-  nav { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+  /* nowrap + horizontal scroll, not flex-wrap — header has a fixed
+     height (its sticky `top: 56px` offset for table theads below
+     depends on that), and a wrapped nav used to overflow that fixed
+     box silently. header's own `overflow: hidden` is a backstop; this
+     is the actual fix, since hidden alone would just make wrapped
+     links unreachable. */
+  nav { display: flex; gap: var(--sp-1); flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; min-width: 0; flex: 1 1 auto; }
+  nav::-webkit-scrollbar { display: none; }
   nav a {
     color: var(--text-2);
     text-decoration: none;
@@ -145,6 +155,8 @@
     padding: 7px 12px;
     border-radius: var(--radius-sm);
     transition: background 0.12s ease, color 0.12s ease;
+    flex: none;
+    white-space: nowrap;
   }
   nav a:hover { color: var(--text); background: var(--surface-2); text-decoration: none; }
   nav a.active { color: var(--accent-ink); background: var(--accent); }
@@ -213,8 +225,23 @@
   .badge-neutral { background: var(--surface-2); color: var(--text-2); border-color: var(--border); }
   .badge-accent { background: var(--accent-wash); color: var(--accent); border-color: color-mix(in srgb, var(--accent) 30%, transparent); }
 
-  /* ── Tables ── */
-  .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
+  /* ── Tables ──
+     .table-wrap sets `overflow-x: auto` for wide tables — but per the
+     CSS overflow spec, when one axis is non-`visible` and the other
+     isn't set, the other is silently upgraded from `visible` to `auto`
+     too. That makes table-wrap itself a scroll container, which becomes
+     the sticky positioning reference for any sticky descendant instead
+     of the page viewport — so `th { position: sticky; top: 56px }` was
+     sticking 56px below table-wrap's OWN top edge, not the page
+     header's bottom edge, landing on top of row 1 on every load, no
+     scrolling required. Fixed by making that reframing intentional
+     instead of accidental: give table-wrap a bounded height and let it
+     scroll both axes as one self-contained unit, with the header
+     sticking to `top: 0` of that same box — a correct, consistent
+     reference instead of a guess at an unrelated ancestor's height.
+     Bonus: long tables (231+ traders) no longer make the whole page
+     enormous. */
+  .table-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
   /* border-collapse: separate (not collapse) is required here — a
      collapsed border shared between a sticky <th> and the first <tr>
      paints as part of whichever cell repaints last under `position:
@@ -230,7 +257,7 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     position: sticky;
-    top: 56px;
+    top: 0;
     z-index: 5;
     background: var(--surface-2);
     border-bottom: none;
