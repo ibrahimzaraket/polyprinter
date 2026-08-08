@@ -38,4 +38,17 @@ services:
       - ./data:/app/data
     ports:
       - "127.0.0.1:8765:8765"
+    # On-demand strategy narration (dashboard/server.py's /analyze route,
+    # 2026-08-08): same least-privilege allowlist reasoning as scout's own
+    # OPENROUTER_* block above — this was missed when that route was
+    # added, which is why "Analyze strategy" stayed hidden/disabled even
+    # with a real key in .env (server.py's strategy_configured check reads
+    # os.environ, and this container was never given these two vars to
+    # read). Dashboard still makes its own on-demand call here rather than
+    # asking scout to do it — scout's LLM calls are for mandate issuance,
+    # not narration, and the two shouldn't share a call site just because
+    # they share a key.
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
     restart: unless-stopped
