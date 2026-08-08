@@ -340,6 +340,58 @@
   .price-scale-tick { position: absolute; top: -3px; width: 2px; height: 12px; background: var(--text-muted); border-radius: 1px; transform: translateX(-1px); }
   .price-scale-tick.strong { background: var(--accent); width: 3px; height: 14px; top: -4px; }
 
+  /* ── How It Works page ── */
+  .flow-diagram { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-3); margin: var(--sp-5) 0; }
+  .flow-box {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm); padding: var(--sp-4); flex: 1 1 200px; min-width: 180px;
+  }
+  .flow-box .flow-title { font-weight: 700; font-size: var(--text-md); margin-bottom: 4px; }
+  .flow-box .flow-sub { font-size: var(--text-sm); color: var(--text-muted); }
+  .flow-box.flow-db { background: var(--accent-wash); border-color: color-mix(in srgb, var(--accent) 30%, transparent); text-align: center; flex: 0 1 160px; }
+  .flow-arrow { flex: none; color: var(--text-muted); font-size: 22px; align-self: center; }
+  @media (max-width: 700px) { .flow-arrow { transform: rotate(90deg); } }
+
+  .module-card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-sm); margin-bottom: var(--sp-4); overflow: hidden;
+  }
+  .module-card > summary {
+    list-style: none; cursor: pointer; padding: var(--sp-4) var(--sp-5);
+    display: flex; align-items: baseline; gap: var(--sp-3); flex-wrap: wrap;
+  }
+  .module-card > summary::-webkit-details-marker { display: none; }
+  .module-card > summary::before { content: "▸"; color: var(--text-muted); margin-right: 2px; transition: transform 0.12s ease; flex: none; }
+  .module-card[open] > summary::before { transform: rotate(90deg); }
+  .module-path { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--accent); font-weight: 650; }
+  .module-summary { color: var(--text-2); font-size: var(--text-sm); }
+  .module-body { padding: 0 var(--sp-5) var(--sp-5); border-top: 1px solid var(--border); }
+  .module-body p { max-width: 78ch; }
+  .module-body .module-note { color: var(--text-muted); font-size: var(--text-sm); font-style: italic; }
+
+  .fn-list { display: flex; flex-direction: column; gap: var(--sp-3); margin-top: var(--sp-4); }
+  .fn-item { padding-left: var(--sp-4); border-left: 3px solid var(--border); }
+  .fn-name { font-family: var(--font-mono); font-weight: 650; color: var(--text); font-size: var(--text-sm); }
+  .fn-name .paren { color: var(--text-muted); font-weight: 400; }
+  .fn-desc { color: var(--text-2); font-size: var(--text-sm); margin-top: 2px; max-width: 74ch; }
+
+  .decision-tree { display: flex; flex-direction: column; gap: 2px; margin: var(--sp-4) 0; }
+  .decision-step {
+    display: flex; align-items: baseline; gap: var(--sp-3); padding: var(--sp-2) var(--sp-3);
+    border-radius: var(--radius-sm); background: var(--surface-2); font-size: var(--text-sm);
+  }
+  .decision-step .step-n { font-family: var(--font-mono); color: var(--text-muted); flex: none; width: 18px; }
+  .decision-step .step-code { font-family: var(--font-mono); font-weight: 700; color: var(--critical); flex: none; }
+  .decision-step .step-code.take { color: var(--good); }
+  .decision-step .step-text { color: var(--text-2); }
+
+  .gap-note {
+    background: var(--warning-wash); border: 1px solid color-mix(in srgb, var(--warning) 35%, transparent);
+    border-radius: var(--radius-md); padding: var(--sp-3) var(--sp-4); margin: var(--sp-3) 0;
+    font-size: var(--text-sm); color: var(--text-2);
+  }
+  .gap-note strong { color: var(--warning); }
+
   ::selection { background: var(--accent-wash); }
 </style>
 </head>
@@ -354,6 +406,7 @@
     <a href="/calibration" class="{{ 'active' if active_tab == 'calibration' }}">Calibration</a>
     <a href="/us-vs-them" class="{{ 'active' if active_tab == 'us_vs_them' }}">Us vs Them</a>
     <a href="/definitions" class="{{ 'active' if active_tab == 'definitions' }}">Definitions</a>
+    <a href="/how-it-works" class="{{ 'active' if active_tab == 'how_it_works' }}">How It Works</a>
   </nav>
 </header>
 <main>

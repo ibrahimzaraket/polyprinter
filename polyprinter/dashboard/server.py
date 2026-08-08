@@ -391,6 +391,11 @@ def definitions() -> str:
     return render_template("definitions.html", active_tab="definitions")
 
 
+@app.route("/how-it-works")
+def how_it_works() -> str:
+    return render_template("how_it_works.html", active_tab="how_it_works")
+
+
 def main() -> None:
     conn = get_connection()  # ensure schema exists before serving
     conn.close()

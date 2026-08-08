@@ -1,0 +1,300 @@
+{% extends "base.html" %}
+{% block title %} — How It Works{% endblock %}
+{% block content %}
+<h1>How It Works</h1>
+<p>A map of the actual code, function by function — what runs, in what order, and exactly how a decision gets made. Everything below describes what's really in the repo today, not a plan. Terms in <a class="hint" href="/definitions" title="Definitions">?</a> style are explained on the <a href="/definitions">Definitions</a> tab.</p>
+
+<div class="gap-note">
+  <strong>Where things stand right now:</strong> Phase 0 (spine) and Phase 1 (Scout) are fully live. Phase 2 (Mirror) is live in <em>polling, paper</em> mode. Phase 3 (Mandates — an LLM reading each dossier and issuing a real trade verdict) hasn't been built yet, which is why almost every Mirror decision today is <code>SKIP</code> / <code>NO_MANDATE</code> — there's no mandate for it to check yet. That's the correct, expected state, not a bug.
+</div>
+
+<h2>The three services, at a glance</h2>
+<p>Three independent processes, one shared SQLite file (<code>data/polyprinter.db</code>, WAL mode) as the single source of truth. No service calls another directly — they only ever talk through the database. Each table has exactly one owner allowed to write it (enforced by convention, not by SQLite itself — see the invariants below); everyone else only reads.</p>
+
+<div class="flow-diagram">
+  <div class="flow-box">
+    <div class="flow-title">Scout</div>
+    <div class="flow-sub">Runs on a timer (default: daily). Discovers traders, scores them, writes append-only snapshots.</div>
+  </div>
+  <div class="flow-arrow">&rarr;</div>
+  <div class="flow-box flow-db">
+    <div class="flow-title">polyprinter.db</div>
+    <div class="flow-sub">the only shared state</div>
+  </div>
+  <div class="flow-arrow">&larr;</div>
+  <div class="flow-box">
+    <div class="flow-title">Mirror</div>
+    <div class="flow-sub">Runs on a timer (default: every 60s). Watches top traders, records their trades, decides TAKE/SKIP.</div>
+  </div>
+</div>
+<div class="flow-diagram" style="margin-top: -8px;">
+  <div class="flow-box" style="flex: 0 1 260px; margin-left: auto; margin-right: auto;">
+    <div class="flow-title">Dashboard</div>
+    <div class="flow-sub">Flask server on 127.0.0.1:8765. Reads the db directly, on every page load. Writes nothing except its own heartbeat.</div>
+  </div>
+</div>
+
+<h2>Scout — discovers and scores traders</h2>
+<p>One full Scout run: pull the Polymarket leaderboard, fetch each candidate's trade history, compute a scored "dossier," and write one snapshot row per trader. Runs standalone — nothing here depends on Mirror or a mandate existing.</p>
+
+<details class="module-card" open>
+  <summary><span class="module-path">polyprinter/scout/discover.py</span><span class="module-summary">— who counts as a candidate</span></summary>
+  <div class="module-body">
+    <p>Pulls the public Polymarket leaderboard across <strong>4 time windows</strong> (day / week / month / all-time) <strong>&times; 2 orderings</strong> (by profit, by volume) &mdash; 8 calls total, unioned and de-duplicated by wallet address. Ordering by volume as well as profit is deliberate: selecting candidates only by realised profit is the exact survivorship bias the whole project exists to correct for (a trader can be #1 on the leaderboard purely from variance).</p>
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">discover_candidates<span class="paren">(client, per_window_limit=50)</span></div>
+        <div class="fn-desc">Runs all 8 leaderboard calls, returns one de-duplicated list of <code>Candidate</code> (address, username, which window/ordering first found them, their volume and P&amp;L at discovery time).</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">upsert_traders<span class="paren">(conn, candidates)</span></div>
+        <div class="fn-desc">Inserts any address not already in the <code>traders</code> table. Existing traders are left untouched &mdash; <code>first_seen</code> and <code>discovery_source</code> are set once, never overwritten.</div>
+      </div>
+    </div>
+    <p class="module-note">Documented gap: the PRD also suggests sampling by resolved-position count, but no Polymarket endpoint ranks all users by that &mdash; verified against the live API, not implemented.</p>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/scout/dossier.py</span><span class="module-summary">— the actual scoring: one candidate in, ~20 metrics out</span></summary>
+  <div class="module-body">
+    <p>For one trader address: fetches their open positions, closed (resolved) positions, and full trade activity from Polymarket, then computes every field that ends up as one row in <code>trader_snapshots</code>.</p>
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">compute_dossier<span class="paren">(client, address)</span></div>
+        <div class="fn-desc">The main function. Fetches positions/closed-positions/activity, then computes performance (raw ROI, win rate, avg win/loss, profit concentration), copyability (hold-to-resolution rate, holding period, entry-price spread, sizing pattern), and liveness (trade counts, active flag). Returns one <code>DossierMetrics</code> object.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">_percentile<span class="paren">(values, pct)</span></div>
+        <div class="fn-desc">Linear-interpolation percentile &mdash; used for the p10/median/p90 entry-price spread and the p90 holding period.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">_fetch_all_closed_positions / _fetch_all_activity<span class="paren">(client, address)</span></div>
+        <div class="fn-desc">Pagination helpers. Bounded, not exhaustive &mdash; up to 500 resolved positions and 5,000 activity events per trader, enough for a ranking signal, not a full audit for a very high-frequency trader.</div>
+      </div>
+    </div>
+    <p class="module-note">Two fields are honest gaps, left <code>None</code> rather than guessed: <code>category_mix_json</code> and <code>median_market_liquidity</code> both need a per-market gamma-api lookup that isn't built &mdash; this is why the "Category mix" section is usually empty on a trader's page, and why <code>decide.py</code> (below) can't enforce a mandate's category/liquidity rules yet either.</p>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/scout/shrinkage.py</span><span class="module-summary">— why the ranking isn't just "biggest ROI wins"</span></summary>
+  <div class="module-body">
+    <p>Two small, pure functions implementing the <a class="hint" href="/definitions#shrinkage">shrinkage</a> correction.</p>
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">shrink<span class="paren">(n, roi, pop_mean, k=30)</span></div>
+        <div class="fn-desc">The formula: <code>(n&middot;roi + k&middot;pop_mean) / (n + k)</code>. A trader is treated as if they'd also played ~30 "average" trades on top of their real ones &mdash; a 6-trade sample gets pulled hard toward the middle, a 400-trade sample barely moves.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">population_mean<span class="paren">(rois)</span></div>
+        <div class="fn-desc">Average raw ROI across the current batch of candidates &mdash; recomputed every scan, not a fixed constant, so shrinkage always compares against the population it's actually part of.</div>
+      </div>
+    </div>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/scout/run.py</span><span class="module-summary">— the entrypoint that ties discover &rarr; dossier &rarr; shrink together</span></summary>
+  <div class="module-body">
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">run_once<span class="paren">(conn, log)</span></div>
+        <div class="fn-desc">One full scan: discover candidates &rarr; compute a dossier for each (one bad candidate is logged and skipped, never kills the run) &rarr; compute the population mean &rarr; shrink every trader's ROI against it &rarr; insert one <code>trader_snapshots</code> row per trader (append-only, never an UPDATE &mdash; a trader's trajectory over time is itself a signal).</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">main<span class="paren">()</span></div>
+        <div class="fn-desc">CLI entrypoint. <code>--loop</code> repeats <code>run_once</code> every <code>--interval-seconds</code> (default 24h); writes a heartbeat before and after every attempt, even on failure, so a dead Scout is visibly distinguishable from a quiet one.</div>
+      </div>
+    </div>
+  </div>
+</details>
+
+<h2>Mirror — watches traders and decides what to do</h2>
+<p>Runs every 60 seconds by default. Each cycle: pick which traders to watch, poll each one for anything new, and for every trade found, decide TAKE, SKIP, or MIRROR_EXIT &mdash; and write that decision down, always, no exceptions.</p>
+
+<details class="module-card" open>
+  <summary><span class="module-path">polyprinter/mirror/watch_poll.py</span><span class="module-summary">— the main loop: pick, poll, record, decide</span></summary>
+  <div class="module-body">
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">select_watchlist<span class="paren">(conn, n=20)</span></div>
+        <div class="fn-desc">Top 20 traders by their latest shrunk ROI snapshot &mdash; re-picked fresh every single cycle from whatever Scout currently has. No fixed list to maintain by hand; a trader falling out of the top 20 simply stops being watched next cycle.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">poll_trader<span class="paren">(conn, client, log, address)</span></div>
+        <div class="fn-desc">For one trader: works out where we left off (see <code>_watch_start_epoch</code> below), fetches their activity since then, and for every genuinely new <code>TRADE</code> entry &mdash; inserts an <code>observed_trades</code> row, calls <code>decide()</code>, and inserts exactly one <code>decisions</code> row. <code>REDEEM</code>/<code>CONVERSION</code> entries are logged but skipped &mdash; neither is a buy/sell we can mirror.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">_watch_start_epoch<span class="paren">(conn, address)</span></div>
+        <div class="fn-desc">The moment we <em>started</em> watching this trader, persisted as an event the first time we see them. Deliberately not recomputed as "now" every cycle &mdash; a trader with zero trades so far would otherwise have their polling window silently reset every single time, permanently missing anything that happened between cycles. Found and fixed this exact bug while building it.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">_already_recorded / _next_log_index<span class="paren">(...)</span></div>
+        <div class="fn-desc">Idempotency. Poll windows deliberately overlap (safer than risking a gap), so the same trade often gets fetched twice &mdash; <code>_already_recorded</code> recognizes an exact repeat (same tx, same address, same token, same side/shares/price) and skips it rather than double-recording.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">run_once<span class="paren">(conn, log, mode, mirror_config)</span></div>
+        <div class="fn-desc">One cycle across the whole watchlist. One bad trader (a request error, a malformed response) is logged and skipped, never kills the cycle for everyone else.</div>
+      </div>
+    </div>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/mirror/position_model.py</span><span class="module-summary">— how big was their position *before* this trade?</span></summary>
+  <div class="module-body">
+    <p>Two small, pure (no database, no network) functions &mdash; the math behind "they sold 40% of their holding, so we sell 40% of ours."</p>
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">running_position<span class="paren">(events)</span></div>
+        <div class="fn-desc">Replays a trader's BUY/SELL history for one token in order &mdash; BUY adds shares, SELL subtracts &mdash; and returns what they're left holding.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">fraction_of<span class="paren">(position_before, shares_moved)</span></div>
+        <div class="fn-desc">What fraction of their pre-trade position this trade represents, clamped to [0, 1]. Returns <code>None</code> if we don't actually know their prior position &mdash; e.g. we only started watching them after they'd already built it &mdash; rather than reporting a made-up fraction.</div>
+      </div>
+    </div>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/mirror/decide.py</span><span class="module-summary">— the actual TAKE / SKIP / MIRROR_EXIT logic</span></summary>
+  <div class="module-body">
+    <p>Every observed trade goes through exactly one of two paths, depending on whether it's them buying or selling.</p>
+
+    <p><strong>Entry (they BUY)</strong> &mdash; checked in this order, first failure wins:</p>
+    <div class="decision-tree">
+      <div class="decision-step"><span class="step-n">1</span><span class="step-code">NO_MANDATE</span><span class="step-text">No mandate has ever been issued for this trader. <strong>This is what almost every decision hits today</strong> &mdash; Mandates are Phase 3, not built yet.</span></div>
+      <div class="decision-step"><span class="step-n">2</span><span class="step-code">MANDATE_EXPIRED</span><span class="step-text">A mandate exists but its <code>expires_at</code> has passed.</span></div>
+      <div class="decision-step"><span class="step-n">3</span><span class="step-code">MANDATE_NOT_FOLLOW</span><span class="step-text">The active mandate's verdict is WATCH or SKIP, not FOLLOW.</span></div>
+      <div class="decision-step"><span class="step-n">4</span><span class="step-code">PRICE_BAND</span><span class="step-text">Entry price falls outside the mandate's min/max entry-price band.</span></div>
+      <div class="decision-step"><span class="step-n">5</span><span class="step-code">NO_CAPITAL</span><span class="step-text">Not enough of the paper bankroll left free (sizing.py's <code>available_capital_usd</code>).</span></div>
+      <div class="decision-step"><span class="step-n">6</span><span class="step-code">PORTFOLIO_CAP</span><span class="step-text">Would push total open exposure past the portfolio-wide cap.</span></div>
+      <div class="decision-step"><span class="step-n">7</span><span class="step-code">CORRELATION_CAP</span><span class="step-text">Would push exposure to <em>this one market</em>, across every followed trader, past its own cap &mdash; ten traders all in one market is concentration, not diversification.</span></div>
+      <div class="decision-step"><span class="step-n">8</span><span class="step-code take">TAKE</span><span class="step-text">Every check passed. Size = the trade's requested $ amount, clamped to the mandate's own per-trade ceiling if it has one.</span></div>
+    </div>
+
+    <p><strong>Exit (they SELL)</strong> &mdash; a completely different, shorter path:</p>
+    <div class="decision-tree">
+      <div class="decision-step"><span class="step-n">1</span><span class="step-code">NO_MATCHING_POSITION</span><span class="step-text">We hold nothing of ours in this token &mdash; almost always because we never took the entry (no mandate existed then either).</span></div>
+      <div class="decision-step"><span class="step-n">2</span><span class="step-code take">MIRROR_EXIT</span><span class="step-text">We do hold a position. Sell the same fraction they just sold (via <code>position_model.fraction_of</code>). Notably: <strong>this path never checks a mandate at all</strong> &mdash; an expired or withdrawn mandate still lets us get out of a position it once authorised. Falls back to a full exit if the fraction can't be computed, since holding an unknown-sized remainder is worse than closing early.</span></div>
+    </div>
+
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">decide<span class="paren">(conn, trade, mode, mirror_config)</span></div>
+        <div class="fn-desc">Dispatches to <code>decide_entry</code> or <code>decide_exit</code> based on the trade's side. This is the one function <code>watch_poll.py</code> actually calls.</div>
+      </div>
+    </div>
+    <p class="module-note">Not implemented, on purpose: a mandate's category-allow/block and minimum-liquidity rules. Neither a trade's category nor its market's liquidity is available on an observed trade today &mdash; the identical gap <code>dossier.py</code> already has. Faking a match would be worse than not checking it.</p>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/mirror/sizing.py</span><span class="module-summary">— the three caps a TAKE has to clear</span></summary>
+  <div class="module-body">
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">per_trade_cap<span class="paren">(requested_usd, mandate_max_usd)</span></div>
+        <div class="fn-desc">The smaller of what we'd size the trade at and the mandate's own per-trade ceiling.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">portfolio_exposure_usd / market_exposure_usd<span class="paren">(conn, ...)</span></div>
+        <div class="fn-desc">Sums the cost basis of every OPEN/PARTIAL position we hold &mdash; overall, or within one specific market across every trader we follow.</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">check_portfolio_cap / check_correlation_cap<span class="paren">(conn, ..., cap_usd)</span></div>
+        <div class="fn-desc">True if adding this trade keeps us under the relevant cap. Both configured in <code>config.yaml</code> (<code>mirror.portfolio_exposure_cap_usd</code>, <code>mirror.correlation_cap_usd</code>).</div>
+      </div>
+      <div class="fn-item">
+        <div class="fn-name">available_capital_usd<span class="paren">(conn, mode, bankroll_usd)</span></div>
+        <div class="fn-desc">Paper bankroll minus what's already committed to open positions &mdash; capital locked in a position isn't free for the next trade.</div>
+      </div>
+    </div>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/mirror/fills.py</span><span class="module-summary">— fill simulation (built, tested, not wired up yet)</span></summary>
+  <div class="module-body">
+    <div class="fn-list">
+      <div class="fn-item">
+        <div class="fn-name">walk_book<span class="paren">(levels, size_usd, fee_bps=200)</span></div>
+        <div class="fn-desc">Given an order book, spends our size level-by-level (crossing the spread), applies a taker fee, and returns the real average price we'd have paid &mdash; never assumes we got their exact price.</div>
+      </div>
+    </div>
+    <p class="module-note">Deliberately not connected to a live order book yet: there's no verified-live Polymarket order-book endpoint in this project, and it wouldn't matter yet anyway &mdash; fills only apply to a TAKE, and no TAKE can happen until Phase 3 exists. Built and unit-tested now so it's ready the moment either changes.</p>
+  </div>
+</details>
+
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/mirror/run.py</span><span class="module-summary">— the entrypoint</span></summary>
+  <div class="module-body">
+    <p>Same shape as Scout's entrypoint on purpose. <code>main()</code> loads <code>mirror:</code> config, then loops <code>watch_poll.run_once</code> every <code>poll_interval_seconds</code> (default 60s), heartbeating before and after every cycle.</p>
+  </div>
+</details>
+
+<h2>Walkthrough: how one real decision gets made</h2>
+<p>Concretely, end to end, for one trade:</p>
+<div class="decision-tree">
+  <div class="decision-step"><span class="step-n">1</span><span class="step-text"><code>select_watchlist</code> picks the top 20 traders by shrunk ROI. Say trader <code>0xabc...</code> is #7.</span></div>
+  <div class="decision-step"><span class="step-n">2</span><span class="step-text"><code>poll_trader</code> asks Polymarket for <code>0xabc</code>'s activity since we last checked. It comes back with one new <code>TRADE</code>: BUY 40 shares at 55&cent; in some market.</span></div>
+  <div class="decision-step"><span class="step-n">3</span><span class="step-text"><code>running_position</code> replays 0xabc's prior trades in that same token to work out what they held right before this one.</span></div>
+  <div class="decision-step"><span class="step-n">4</span><span class="step-text">An <code>observed_trades</code> row is inserted &mdash; the permanent record that this trade happened and when we saw it.</span></div>
+  <div class="decision-step"><span class="step-n">5</span><span class="step-text"><code>decide()</code> sees it's a BUY, calls <code>decide_entry</code>. It looks up 0xabc's active mandate &mdash; finds none (Phase 3 isn't built) &mdash; and returns <code>SKIP</code> / <code>NO_MANDATE</code> immediately, without ever reaching the price-band or sizing checks.</span></div>
+  <div class="decision-step"><span class="step-n">6</span><span class="step-text">A <code>decisions</code> row is inserted, linked to that exact <code>observed_trades</code> row, with the reason recorded in plain text.</span></div>
+  <div class="decision-step"><span class="step-n">7</span><span class="step-text">The next time you load <code>/decisions</code>, that row is right there &mdash; trader, verdict, reason, latency &mdash; because the dashboard reads the same database file, live, on every request.</span></div>
+</div>
+
+<h2>Dashboard — reads the database, writes nothing else</h2>
+<details class="module-card">
+  <summary><span class="module-path">polyprinter/dashboard/server.py</span><span class="module-summary">— every route, and the helpers behind the busier pages</span></summary>
+  <div class="module-body">
+    <p>Every route below does the same thing at heart: query the database, hand rows to a template. No route ever calls Scout or Mirror &mdash; if a page looks stale, it's because the underlying data hasn't changed yet, not because the dashboard is behind.</p>
+    <div class="fn-list">
+      <div class="fn-item"><div class="fn-name">GET / <span class="paren">(now)</span></div><div class="fn-desc">System-wide snapshot: heartbeats, copy tax headline, last event, trader/snapshot/decision counts.</div></div>
+      <div class="fn-item"><div class="fn-name">GET /traders</div><div class="fn-desc">Every trader's <em>latest</em> snapshot, ranked by shrunk ROI.</div></div>
+      <div class="fn-item"><div class="fn-name">GET /traders/&lt;address&gt;</div><div class="fn-desc">One trader's full dossier, sparkline history, P&amp;L by market, and recent trades.</div></div>
+      <div class="fn-item"><div class="fn-name">GET /decisions</div><div class="fn-desc">The 200 most recent decisions, joined against the trade that triggered each one.</div></div>
+      <div class="fn-item"><div class="fn-name">GET /calibration, /us-vs-them</div><div class="fn-desc">Intentionally empty until Phase 5 (Learner) and Phase 2's outcomes data exist &mdash; see each page's own explanation.</div></div>
+      <div class="fn-item"><div class="fn-name">GET /definitions, /how-it-works</div><div class="fn-desc">Static reference pages &mdash; this one, and the plain-language glossary.</div></div>
+      <div class="fn-item"><div class="fn-name">_sparkline<span class="paren">(snapshots, field, kind)</span></div><div class="fn-desc">Turns a metric's snapshot history into inline-SVG polyline points for the little trend charts on a trader's page.</div></div>
+      <div class="fn-item"><div class="fn-name">_recent_trades / _pnl_by_market<span class="paren">(conn, address)</span></div><div class="fn-desc">Both read Scout's already-archived raw API responses (<code>raw_responses</code>) rather than making a new network call &mdash; individual trade history and per-market P&amp;L, straight from data Scout already fetched.</div></div>
+    </div>
+  </div>
+</details>
+
+<h2>The database &mdash; one file, six rules everyone follows</h2>
+<p>SQLite, WAL mode, at <code>data/polyprinter.db</code>. Every table below has exactly one service allowed to write it.</p>
+<div class="table-wrap">
+<table>
+  <tr><th>Table</th><th>Owner</th><th>What it holds</th></tr>
+  <tr><td><code>traders</code></td><td>Scout</td><td>Every address ever discovered, and how.</td></tr>
+  <tr><td><code>trader_snapshots</code></td><td>Scout</td><td>One append-only dossier per scan &mdash; a trader's full metric history over time.</td></tr>
+  <tr><td><code>mandates</code></td><td>Phase 3 (none yet)</td><td>LLM-issued FOLLOW/WATCH/SKIP verdicts. Empty today.</td></tr>
+  <tr><td><code>observed_trades</code></td><td>Mirror</td><td>Every trade Mirror has ever seen a watched trader make.</td></tr>
+  <tr><td><code>decisions</code></td><td>Mirror</td><td>Exactly one row per <code>observed_trades</code> row &mdash; TAKE, SKIP, or MIRROR_EXIT, with a reason.</td></tr>
+  <tr><td><code>positions</code> / <code>position_exits</code></td><td>Mirror</td><td>Our own paper positions, and each partial exit against them. Empty today &mdash; nothing has been TAKEn yet.</td></tr>
+  <tr><td><code>outcomes</code></td><td>Phase 5 (Learner, none yet)</td><td>Resolved P&amp;L and copy tax per position. Empty today.</td></tr>
+  <tr><td><code>heartbeats</code></td><td>every service</td><td>One row per service, upserted on every tick &mdash; "still alive" vs. "silently dead."</td></tr>
+  <tr><td><code>events</code></td><td>every service</td><td>Structured, queryable log &mdash; every <code>Logger.info/error</code> call lands here too, not just in a log file.</td></tr>
+  <tr><td><code>raw_responses</code></td><td>every service</td><td>Every external API call's raw body, before anything parses it &mdash; the audit trail this whole system is built on.</td></tr>
+</table>
+</div>
+
+<p style="margin-top: var(--sp-4);"><strong>The six invariants (docs/SCHEMA.md), in plain language:</strong></p>
+<div class="decision-tree">
+  <div class="decision-step"><span class="step-n">1</span><span class="step-text">Every observed trade gets a decision. No trade is ever silently dropped &mdash; if Mirror saw it, it's in <code>decisions</code>, even as a SKIP.</span></div>
+  <div class="decision-step"><span class="step-n">2</span><span class="step-text">Exiting a position never waits on a mandate. If our mandate to follow someone expires while we're still holding their trade, we can still get out.</span></div>
+  <div class="decision-step"><span class="step-n">3</span><span class="step-text">A trader's snapshot history is never edited, only added to &mdash; the trajectory itself is signal.</span></div>
+  <div class="decision-step"><span class="step-n">4</span><span class="step-text">Every LLM call's full prompt and response get stored, not truncated &mdash; the only real audit trail for "why did it say that."</span></div>
+  <div class="decision-step"><span class="step-n">5</span><span class="step-text">One writer per table family. The dashboard never writes trading data, ever.</span></div>
+  <div class="decision-step"><span class="step-n">6</span><span class="step-text">Every decision and position is tagged paper/live/shadow, so the ledgers can never accidentally mix in a query.</span></div>
+</div>
+
+<h2>What's real vs. what's still a documented gap</h2>
+<div class="gap-note"><strong>Live and real:</strong> trader discovery &amp; scoring (Scout), shrinkage-adjusted ranking, real-time trade detection &amp; decision-writing (Mirror), all of it against live Polymarket data, all of it verified by 45 passing tests plus real end-to-end runs.</div>
+<div class="gap-note"><strong>Structurally waiting on Phase 3:</strong> every entry decision (no mandate exists to authorise a TAKE yet), fill simulation (only matters once a TAKE can happen), category/liquidity mandate rules (need a per-market lookup that isn't built).</div>
+<div class="gap-note"><strong>Not started:</strong> Phase 3 (Mandates/LLM), Phase 4 (on-chain event stream, replacing polling), Phase 5 (Learner, calibration, shadow benchmark), Phase 6 (live trading).</div>
+{% endblock %}

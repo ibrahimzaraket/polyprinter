@@ -106,6 +106,7 @@ check_status /decisions 200
 check_status /calibration 200
 check_status /us-vs-them 200
 check_status /definitions 200
+check_status /how-it-works 200
 check_status /traders/0xdoes-not-exist 404
 
 echo "== Phase 1: run Scout against LIVE Polymarket data (small pool, fast) =="
