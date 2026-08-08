@@ -150,6 +150,96 @@ def _recent_trades(conn: sqlite3.Connection, address: str, *, limit: int = RECEN
     return out
 
 
+PNL_BY_MARKET_LIMIT = 40
+
+
+def _pnl_by_market(conn: sqlite3.Connection, address: str, *, limit: int = PNL_BY_MARKET_LIMIT) -> list[dict]:
+    """Per-market (per-slug) P&L for a trader — one row per position, open
+    or closed, so "what's actually happening in their book" is visible
+    market-by-market instead of only as one aggregate ROI number.
+
+    Sourced from Scout's already-archived /positions (open) and
+    /closed-positions (closed) responses in raw_responses — same audit
+    trail as _recent_trades, no new API call. Polymarket's API already
+    computes realizedPnl/cashPnl per position; that's used directly
+    rather than re-deriving P&L from individual trade legs (buy/sell
+    matching, cost basis) ourselves, which the API is better placed to
+    get right than a client-side reconstruction from partial data.
+
+    Only the most recently archived page of each endpoint is read (open
+    positions: one call, limit=500, so this is already everything open;
+    closed positions: one page of up to 50, the most recent — a trader
+    with more than 50 resolved positions won't have every one listed
+    here, by design, same tradeoff _recent_trades makes for the same
+    reason: this is "what's happening lately," not a full ledger).
+    """
+    rows: list[dict] = []
+
+    open_row = conn.execute(
+        """
+        SELECT body FROM raw_responses
+        WHERE source = 'data-api' AND url LIKE '%/positions%' AND url NOT LIKE '%/closed-positions%'
+          AND url LIKE ?
+        ORDER BY fetched_at DESC LIMIT 1
+        """,
+        (f"%user={address}%",),
+    ).fetchone()
+    if open_row is not None:
+        try:
+            for p in json.loads(open_row["body"]):
+                realized = p.get("realizedPnl") or 0.0
+                unrealized = p.get("cashPnl") or 0.0
+                rows.append(
+                    {
+                        "slug": p.get("slug"),
+                        "title": p.get("title"),
+                        "outcome": p.get("outcome"),
+                        "status": "OPEN",
+                        "realized_pnl": p.get("realizedPnl"),
+                        "unrealized_pnl": p.get("cashPnl"),
+                        "total_pnl": realized + unrealized,
+                        "size": p.get("size"),
+                        "avg_price": p.get("avgPrice"),
+                        "cur_price": p.get("curPrice"),
+                    }
+                )
+        except (TypeError, ValueError):
+            pass
+
+    closed_row = conn.execute(
+        """
+        SELECT body FROM raw_responses
+        WHERE source = 'data-api' AND url LIKE '%/closed-positions%'
+          AND url LIKE ? AND url LIKE '%offset=0%'
+        ORDER BY fetched_at DESC LIMIT 1
+        """,
+        (f"%user={address}%",),
+    ).fetchone()
+    if closed_row is not None:
+        try:
+            for p in json.loads(closed_row["body"]):
+                realized = p.get("realizedPnl") or 0.0
+                rows.append(
+                    {
+                        "slug": p.get("slug"),
+                        "title": p.get("title"),
+                        "outcome": p.get("outcome"),
+                        "status": "CLOSED",
+                        "realized_pnl": p.get("realizedPnl"),
+                        "unrealized_pnl": None,
+                        "total_pnl": realized,
+                        "size": p.get("totalBought"),
+                        "avg_price": p.get("avgPrice"),
+                        "cur_price": p.get("curPrice"),
+                    }
+                )
+        except (TypeError, ValueError):
+            pass
+
+    rows.sort(key=lambda r: abs(r["total_pnl"]), reverse=True)
+    return rows[:limit]
+
+
 def _latest_snapshot_per_trader(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
         """
@@ -254,6 +344,7 @@ def trader_detail(address: str) -> str:
             sparklines[field] = {**spark, "label": label}
 
     recent_trades = _recent_trades(conn, address)
+    pnl_by_market = _pnl_by_market(conn, address)
 
     return render_template(
         "trader_detail.html",
@@ -263,6 +354,7 @@ def trader_detail(address: str) -> str:
         category_mix=category_mix,
         sparklines=sparklines,
         recent_trades=recent_trades,
+        pnl_by_market=pnl_by_market,
         active_mandate=active_mandate,
         active_tab="traders",
     )

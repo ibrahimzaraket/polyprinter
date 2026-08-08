@@ -56,13 +56,24 @@ check_status() {
 }
 
 check_contains() {
-  local path="$1" needle="$2"
-  if curl -s "$DASH$path" | grep -qF "$needle"; then
-    echo "ok    GET $path contains '$needle'"
-  else
-    echo "FAIL  GET $path does NOT contain '$needle'"
-    FAIL=1
-  fi
+  # Retries a few times before failing — seen twice (2026-08-08) as a
+  # one-off transient miss immediately after a scout run, on static
+  # template text that can't legitimately depend on the data just
+  # written, then passing clean on the very next attempt. Root cause
+  # not pinned down (Flask's dev server here isn't threaded and isn't
+  # in reload mode, so the two obvious explanations don't fit); a short
+  # retry is cheap insurance against whatever it is rather than a false
+  # DRIVER FAILED on a real, working page.
+  local path="$1" needle="$2" attempt
+  for attempt in 1 2 3; do
+    if curl -s "$DASH$path" | grep -qF "$needle"; then
+      echo "ok    GET $path contains '$needle'"
+      return
+    fi
+    [ "$attempt" -lt 3 ] && sleep 1
+  done
+  echo "FAIL  GET $path does NOT contain '$needle' (after $attempt attempts)"
+  FAIL=1
 }
 
 echo "== build =="
