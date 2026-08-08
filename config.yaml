@@ -10,6 +10,21 @@ scout:
 db:
   path: data/polyprinter.db
 
+# Phase 2 (Mirror, polling mode). Mandates don't exist until Phase 3, so
+# every entry resolves to SKIP/NO_MANDATE in practice — these numbers only
+# start mattering once mandates start issuing FOLLOW verdicts. Chosen as
+# a small, clearly-paper-scale bankroll (matches the "$100 account" framing
+# already used on the dashboard's Definitions tab), not a real budget.
+mirror:
+  poll_interval_seconds: 60
+  # How many traders to poll each cycle, auto-refreshed each run from the
+  # current shrunk-ROI ranking (Scout's latest snapshot per trader) — no
+  # static watchlist to maintain by hand until there's a reason to want one.
+  watchlist_size: 20
+  paper_bankroll_usd: 1000
+  portfolio_exposure_cap_usd: 500      # FR-16 — 50% of bankroll
+  correlation_cap_usd: 150             # FR-17 — 15% of bankroll, one market
+
 # Dashboard bind address is intentionally NOT configurable here — it's
 # hardcoded to 127.0.0.1:8765 in dashboard/server.py so a future
 # config-overrides.yaml can't accidentally expose it. See CLAUDE.md.

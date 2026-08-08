@@ -6,6 +6,13 @@ services:
       - ./data:/app/data
     restart: unless-stopped
 
+  mirror:
+    build: .
+    command: ["python", "-m", "polyprinter.mirror.run", "--loop"]
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
   dashboard:
     build: .
     command: ["python", "-m", "polyprinter.dashboard.server"]

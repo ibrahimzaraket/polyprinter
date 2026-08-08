@@ -105,6 +105,7 @@ check_status /traders 200
 check_status /decisions 200
 check_status /calibration 200
 check_status /us-vs-them 200
+check_status /definitions 200
 check_status /traders/0xdoes-not-exist 404
 
 echo "== Phase 1: run Scout against LIVE Polymarket data (small pool, fast) =="
@@ -118,6 +119,40 @@ if [ "$TRADER_ROWS" -lt 1 ]; then
   FAIL=1
 else
   echo "ok    /traders rendered $TRADER_ROWS trader row(s)"
+fi
+
+echo "== Phase 2: run Mirror once against LIVE Polymarket data (polling mode) =="
+docker compose run --rm mirror python -m polyprinter.mirror.run
+
+echo "== confirm decision coverage (invariant 1) and heartbeat (FR-19) =="
+UNCOVERED=$(docker compose exec -T dashboard python -c "
+import sqlite3
+conn = sqlite3.connect('/app/data/polyprinter.db')
+n = conn.execute('''
+    SELECT COUNT(*) FROM observed_trades o
+    LEFT JOIN decisions d ON d.observed_trade_id = o.id
+    WHERE d.id IS NULL
+''').fetchone()[0]
+print(n)
+" | tr -d '\r')
+if [ "$UNCOVERED" != "0" ]; then
+  echo "FAIL  $UNCOVERED observed_trades row(s) have no decisions row (invariant 1 violated)"
+  FAIL=1
+else
+  echo "ok    every observed_trades row has a decisions row"
+fi
+check_contains / "PolyPrinter"   # cheap smoke that Now still renders after Mirror wrote rows
+MIRROR_BEAT=$(docker compose exec -T dashboard python -c "
+import sqlite3
+conn = sqlite3.connect('/app/data/polyprinter.db')
+row = conn.execute(\"SELECT 1 FROM heartbeats WHERE service = 'mirror'\").fetchone()
+print(1 if row else 0)
+" | tr -d '\r')
+if [ "$MIRROR_BEAT" != "1" ]; then
+  echo "FAIL  mirror never wrote a heartbeat"
+  FAIL=1
+else
+  echo "ok    mirror heartbeat present"
 fi
 
 echo "== test suite =="

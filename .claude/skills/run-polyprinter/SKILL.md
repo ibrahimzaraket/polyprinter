@@ -1,15 +1,18 @@
 ---
 name: run-polyprinter
-description: Build, run, and drive PolyPrinter (Polymarket trader-scouting dashboard + Scout service). Use when asked to start polyprinter, run the dashboard, run Scout against live Polymarket data, seed the demo decision, or smoke-test the stack.
+description: Build, run, and drive PolyPrinter (Polymarket trader-scouting dashboard + Scout + Mirror services). Use when asked to start polyprinter, run the dashboard, run Scout or Mirror against live Polymarket data, seed the demo decision, or smoke-test the stack.
 ---
 
-PolyPrinter is a two-service Docker Compose app: `scout` (a batch job that
-pulls live Polymarket data and computes trader dossiers) and `dashboard`
-(a read-only Flask server on `127.0.0.1:8765`). Drive it with
-`.claude/skills/run-polyprinter/driver.sh` — a curl-based smoke script that
-builds, launches, seeds the Phase 0 fixture, runs Scout against **live**
-Polymarket data, and asserts on every dashboard route. All paths below are
-relative to the repo root (`/opt/polyprinter`), not to this skill directory.
+PolyPrinter is a three-service Docker Compose app: `scout` (a batch job
+that pulls live Polymarket data and computes trader dossiers), `mirror`
+(polling-mode trade detection against Scout's current watchlist — Phase 2,
+paper only, no Mandates yet so every entry resolves to SKIP/NO_MANDATE by
+design), and `dashboard` (a read-only Flask server on `127.0.0.1:8765`).
+Drive it with `.claude/skills/run-polyprinter/driver.sh` — a curl-based
+smoke script that builds, launches, seeds the Phase 0 fixture, runs Scout
+and Mirror against **live** Polymarket data, and asserts on every
+dashboard route. All paths below are relative to the repo root
+(`/opt/polyprinter`), not to this skill directory.
 
 ## Prerequisites
 
@@ -40,9 +43,12 @@ local db → `docker compose up -d dashboard` → check the port is published
 loopback-only → seed the Phase 0 demo decision and confirm it renders →
 hit every dashboard route and check status codes → run Scout against
 **live** Polymarket data (`--leaderboard-limit 5`, ~1-2 min) → confirm real
-trader rows rendered on `/traders` → run the pytest suite → `docker compose
-down`. Exits non-zero on the first failed assertion; prints `ok`/`FAIL`
-per check.
+trader rows rendered on `/traders` → run Mirror once against **live**
+Polymarket data (polling mode, paper) → confirm 100% decision coverage
+(every `observed_trades` row has a `decisions` row — invariant 1) and that
+a `mirror` heartbeat exists (FR-19) → run the pytest suite → `docker
+compose down`. Exits non-zero on the first failed assertion; prints
+`ok`/`FAIL` per check.
 
 To just look at the dashboard interactively instead of running the full
 driver:
@@ -51,6 +57,7 @@ driver:
 docker compose up -d dashboard
 docker compose exec dashboard python scripts/seed_demo_decision.py   # Phase 0 fixture
 docker compose run --rm scout python -m polyprinter.scout.run --leaderboard-limit 10   # fast Scout pass
+docker compose run --rm mirror python -m polyprinter.mirror.run   # one Mirror poll cycle
 curl -s http://127.0.0.1:8765/traders | less
 # or open http://127.0.0.1:8765/ in a browser on the same machine
 ```
@@ -64,7 +71,7 @@ when driving this interactively.
 ## Run (human path)
 
 ```bash
-docker compose up -d          # both services, dashboard + scout --loop
+docker compose up -d          # all three services: dashboard + scout --loop + mirror --loop
 open http://127.0.0.1:8765/   # only reachable from the same machine
 docker compose down
 ```
@@ -76,9 +83,12 @@ docker run --rm -v "$PWD/tests:/app/tests" polyprinter-scout \
   sh -c "pip install --no-cache-dir pytest -q && python -m pytest tests -q"
 ```
 
-9 tests, frozen real API fixtures in `tests/fixtures/` (captured live
-2026-08-07) — a shape change in the real API breaks these before it breaks
-a live run.
+45 tests. Scout's against frozen real API fixtures in `tests/fixtures/`
+(captured live 2026-08-07) — a shape change in the real API breaks these
+before it breaks a live run. Mirror's against a temp-file db (real SQLite,
+real schema, via `db/conn.get_connection(tmp_path / "test.db")`) with a
+fake data client — no network, but real inserts, real foreign keys, real
+invariant checks.
 
 ---
 
@@ -193,3 +203,31 @@ a live run.
   requests each ≈ 7-8 min). Use `--leaderboard-limit 5` for a fast
   interactive check; watch for `dossier.progress` lines every 10
   candidates.
+- **Mirror's first poll of a newly-watched trader almost always shows 0
+  new decisions, and that's correct, not a bug.** A trader only enters
+  the watchlist once Scout has scored them; from that moment Mirror
+  watches *forward* (real-time detection, not a backfill — FR-11), so the
+  very first cycle only covers however many seconds have passed since
+  they were first added. Give it a few `mirror.poll_interval_seconds`
+  cycles (default 60s) before expecting a real TRADE to show up, even
+  against genuinely active top-20 traders.
+- **Almost every Mirror decision is `SKIP`/`NO_MANDATE`, and that's the
+  correct Phase 2 state, not a bug either.** Mandates don't exist until
+  Phase 3 — `mirror/decide.py` checks for one on every BUY and finds
+  none. This is what "100% decision coverage" (Phase 2's actual exit
+  criterion) is proving: the full detect → decide → write pipeline works
+  end-to-end, safely, before any real money-shaped decision is possible.
+  `SELL`s resolve to `SKIP`/`NO_MATCHING_POSITION` for the same root
+  reason — we never took the entry, so there's nothing of ours to exit.
+- **`mirror/decide.py` doesn't check a mandate's category-allow/block or
+  minimum-liquidity fields, on purpose.** Neither a trade's category nor
+  its market's liquidity is available on an `observed_trades` row —
+  `scout/dossier.py` hit the identical gap computing
+  `category_mix_json`/`median_market_liquidity` (see that file's field
+  comments; both need a gamma-api lookup per market that hasn't been
+  built). `mirror/fills.py`'s book-walk is similarly real code with no
+  live order-book source wired to it yet, for the same reason: no
+  verified-live CLOB endpoint, and the `oracle_legacy/` code the repo
+  structure doc says to port fee logic from doesn't exist in this repo.
+  All of this is inert anyway until Phase 3 makes a TAKE possible at all
+  — see the point above.
