@@ -167,6 +167,16 @@ invariant checks.
   mid-run. 408 was added after a live full-scale run (2026-08-07) lost one
   candidate to a bare timeout that would've succeeded on retry.
 
+- **`raw_responses` used to grow unbounded from exact duplicates.** Scout
+  has no incremental cursor the way Mirror's `watch_poll.py` does, so a
+  re-run refetches each trader's full activity history from scratch —
+  byte-identical to last time for any trader with nothing new. `store_raw`
+  had no uniqueness check, so every refetch inserted a fresh row. Found
+  live 2026-08-08: 14,671 exact url+body duplicates, ~2.4GB of a 5.1GB db.
+  Fixed by hashing `body` and skipping the insert (returning the existing
+  row's id) when `(source, url, body_hash)` already matches — see
+  `migrations/0002_raw_responses_dedup.sql`.
+
 - **`driver.sh` used to wipe the live dashboard's database, silently — twice.**
   It resets to a clean db on every run (`rm -f data/polyprinter.db*`) so
   its own assertions are deterministic — but that file is the *same* db
