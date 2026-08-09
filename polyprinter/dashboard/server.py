@@ -305,7 +305,19 @@ def _market_context(conn: sqlite3.Connection, address: str, market_id: str) -> d
         entries = json.loads(row["body"])
     except (TypeError, ValueError):
         return {}
+    if not isinstance(entries, list):
+        # The most recently stored /activity response for this user isn't
+        # always a successful payload — a rate-limited call stores its
+        # error body too (raw-before-parsing is structural, not
+        # conditional on success), e.g. {"error": "Too Many Requests"}.
+        # Found live 2026-08-09: iterating a dict yields its string keys,
+        # and `"error".get(...)` doesn't exist — a 500 on /portfolio from
+        # data that was never actually malformed, just not what this
+        # function assumed "the latest row" would always be.
+        return {}
     for e in entries:
+        if not isinstance(e, dict):
+            continue
         if e.get("conditionId") == market_id:
             return {"title": e.get("title"), "outcome": e.get("outcome"), "slug": e.get("slug")}
     return {}
