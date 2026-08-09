@@ -28,14 +28,14 @@ def _insert_snapshot(conn, *, resolved_positions=10, roi_shrunk=0.20, hold_to_re
     return cur.lastrowid
 
 
-def _insert_mandate(conn, snapshot_id):
+def _insert_mandate(conn, snapshot_id, *, issued_by="llm"):
     conn.execute(
         """
         INSERT INTO mandates (
-            address, version, snapshot_id, verdict, confidence, reasoning, issued_at, expires_at
-        ) VALUES (?, 1, ?, 'FOLLOW', 'HIGH', 'test', ?, ?)
+            address, version, snapshot_id, verdict, confidence, reasoning, issued_at, expires_at, issued_by
+        ) VALUES (?, 1, ?, 'FOLLOW', 'HIGH', 'test', ?, ?, ?)
         """,
-        (ADDRESS, snapshot_id, _now(), _now()),
+        (ADDRESS, snapshot_id, _now(), _now(), issued_by),
     )
 
 
@@ -99,3 +99,44 @@ def test_large_hold_to_resolution_move_triggers(tmp_path):
     should, reason = should_reevaluate(conn, ADDRESS, latest)
     assert should is True
     assert "hold_to_resolution_rate" in reason
+
+
+def test_operator_mandate_never_reevaluated_even_with_no_snapshot_link(tmp_path):
+    # Regression test for a real production incident (2026-08-08):
+    # operator-issued mandates never set snapshot_id (mandate/operator.py
+    # never links one — there's no dossier behind a manual "tail this
+    # wallet" click), which used to fall straight into the "no linked
+    # snapshot" branch below and unconditionally trigger a same-day LLM
+    # re-evaluation that silently overwrote the operator's own choice.
+    conn = _make_db(tmp_path)
+    conn.execute(
+        """
+        INSERT INTO mandates (
+            address, version, snapshot_id, verdict, confidence, reasoning,
+            issued_at, expires_at, issued_by, sizing_mode, size_multiplier, fast_lane
+        ) VALUES (?, 1, NULL, 'FOLLOW', 'HIGH', 'operator test', ?, ?, 'operator', 'balance_matched', 1.5, 1)
+        """,
+        (ADDRESS, _now(), _now()),
+    )
+    latest = conn.execute(
+        "SELECT * FROM trader_snapshots WHERE id = ?", (_insert_snapshot(conn),)
+    ).fetchone()
+
+    should, reason = should_reevaluate(conn, ADDRESS, latest)
+    assert should is False
+    assert "operator" in reason.lower()
+
+
+def test_operator_mandate_not_overridden_by_large_metric_move(tmp_path):
+    # Even a metric move that would normally trigger re-evaluation must
+    # not touch an active operator mandate — the whole point is that only
+    # the operator's own actions change it.
+    conn = _make_db(tmp_path)
+    old_id = _insert_snapshot(conn, resolved_positions=10, roi_shrunk=0.20, hold_to_resolution_rate=0.80)
+    _insert_mandate(conn, old_id, issued_by="operator")
+
+    latest_id = _insert_snapshot(conn, resolved_positions=50, roi_shrunk=0.90, hold_to_resolution_rate=0.10)
+    latest = conn.execute("SELECT * FROM trader_snapshots WHERE id = ?", (latest_id,)).fetchone()
+
+    should, reason = should_reevaluate(conn, ADDRESS, latest)
+    assert should is False

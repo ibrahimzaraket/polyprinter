@@ -36,10 +36,28 @@ def should_reevaluate(conn: sqlite3.Connection, address: str, latest_snapshot: s
     """Returns (should_call_llm, human-readable reason) — the reason is
     logged either way (see mandate/issue.py) so a "why didn't this trader
     get a mandate today" question has a real answer, not silence.
+
+    An operator-issued mandate is never a re-evaluation candidate — found
+    live 2026-08-08: mandate/operator.py's own docstring promises an
+    operator mandate "stays active until the operator explicitly revokes
+    it," but this function didn't know that promise existed. Operator
+    mandates have no `snapshot_id` (operator.py never sets one — there's
+    no dossier snapshot behind a manual "tail this wallet" click), so the
+    "no linked snapshot to compare against" branch below unconditionally
+    fired `True` for every operator-tailed trader on Scout's very next
+    scan, silently replacing a deliberate fast-lane/balance-matched
+    FOLLOW with whatever the LLM decided (in the incident that surfaced
+    this, a hard SKIP) — the operator's own explicit choice, reversed by
+    an unrelated automated process, with no notification. Caught in
+    production, not by a test: `0x9c3ce009...`'s operator mandate (fast
+    lane on, balance-matched, 1.0x) was overwritten this way within
+    hours of being issued.
     """
     active = _lookup_active_mandate(conn, address)
     if active is None:
         return True, "no mandate has ever been issued for this trader"
+    if active["issued_by"] == "operator":
+        return False, "active mandate is operator-issued — never auto-re-evaluated; only the operator's own tail/mandate actions change this"
 
     prior_snapshot = None
     if active["snapshot_id"] is not None:
